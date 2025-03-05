@@ -1,0 +1,10 @@
+[websocket]
+url = "ws://localhost"  # WebSocket URL for CKB node
+reconnect_interval = 5000    # milliseconds
+ping_interval = 30000        # milliseconds
+
+[ckb]
+type_script_code_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"  # Example code hash (TYPE_ID)
+type_script_hash_type = "data1"     # Can be "type" or "data1"
+query_limit = 300                   # Number of cells to fetch per query 
+query_interval_secs = 10            # Number of seconds to wait between queries
