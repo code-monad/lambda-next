@@ -218,7 +218,7 @@ dependencies = [
  "ckb-fixed-hash",
  "ckb-hash",
  "ckb-occupied-capacity",
- "molecule",
+ "molecule 0.8.0",
  "numext-fixed-uint",
 ]
 
@@ -314,7 +314,7 @@ dependencies = [
  "derive_more",
  "golomb-coded-set",
  "merkle-cbt",
- "molecule",
+ "molecule 0.8.0",
  "numext-fixed-uint",
  "paste",
 ]
@@ -771,6 +771,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "http"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -960,9 +966,13 @@ dependencies = [
  "ckb-jsonrpc-types",
  "config",
  "futures",
+ "hex",
+ "lazy_static",
+ "molecule 0.7.5",
  "serde",
  "serde_json",
  "serde_yaml",
+ "spore-types",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -1053,6 +1063,17 @@ dependencies = [
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "molecule"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4fd9767ab5e5f2ea40f71ff4c8bdb633c50509052e093c2fdd0e390a749dfa3"
+dependencies = [
+ "bytes",
+ "cfg-if",
+ "faster-hex",
 ]
 
 [[package]]
@@ -1695,6 +1716,15 @@ checksum = "c970269d99b64e60ec3bd6ad27270092a5394c4e309314b18ae3fe575695fbe8"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "spore-types"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f29460d325068f3a501917ea902fcc73c7991591c02cd96a510f5f5d27fd5871"
+dependencies = [
+ "molecule 0.7.5",
 ]
 
 [[package]]

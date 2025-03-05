@@ -5,6 +5,7 @@ use std::error::Error;
 pub struct Config {
     pub websocket: WebSocketConfig,
     pub ckb: CkbConfig,
+    pub spore_filters: Vec<SporeFilterConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -20,6 +21,18 @@ pub struct CkbConfig {
     pub type_script_hash_type: String,
     pub query_limit: u32,
     pub query_interval_secs: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SporeFilterConfig {
+    pub name: String,
+    pub enabled: bool,
+    pub filter_by_cluster: bool,
+    pub cluster_id: String,
+    pub filter_by_type_ids: bool,
+    pub type_ids: Vec<String>,
+    pub type_ids_file: Option<String>,
+    pub skip_decoding: bool,
 }
 
 impl Config {

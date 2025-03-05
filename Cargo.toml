@@ -17,3 +17,8 @@ uuid = { version = "1.7", features = ["v4", "fast-rng"] }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Spore Protocol
+spore-types = "0.3.0"
+hex = "0.4.3"
+molecule = "0.7.5"
+lazy_static = "1.4.0"

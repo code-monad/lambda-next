@@ -133,7 +133,7 @@ pub async fn handle_websocket_messages(
                             Ok(json) => {
                                 // Check if it's a JSON-RPC response with an ID
                                 if let Some(id) = json.get("id").and_then(|id| id.as_u64()) {
-                                    info!(id = %id, "Received response for request");
+                                    debug!(id = %id, "Received response for request");
 
                                     // Store the response in the shared state
                                     let mut state = state.lock().await;
@@ -145,7 +145,7 @@ pub async fn handle_websocket_messages(
                                     if let Some(result) = json.get("result") {
                                         if let Some(objects) = result.get("objects") {
                                             if let Some(objects_array) = objects.as_array() {
-                                                info!(count = %objects_array.len(), "Found cells in response");
+                                                debug!(count = %objects_array.len(), "Found cells in response");
                                             }
                                         }
                                     }

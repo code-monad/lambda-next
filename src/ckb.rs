@@ -186,7 +186,7 @@ impl CkbClient {
             })?;
 
         // Note: The response will be handled by the websocket message handler
-        info!("JSON-RPC request sent with ID: {}", id);
+        debug!("JSON-RPC request sent with ID: {}", id);
         Ok(json!({"id": id}))
     }
 

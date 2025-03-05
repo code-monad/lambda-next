@@ -17,6 +17,7 @@ pub enum AppError {
     InvalidScheme(String),
     CkbError(CkbError),
     MessageHandlingError(String),
+    SporeError(String),
 }
 
 impl fmt::Display for AppError {
@@ -28,6 +29,7 @@ impl fmt::Display for AppError {
             AppError::InvalidScheme(s) => write!(f, "Invalid URL scheme: {}", s),
             AppError::CkbError(e) => write!(f, "CKB error: {}", e),
             AppError::MessageHandlingError(e) => write!(f, "Message handling error: {}", e),
+            AppError::SporeError(e) => write!(f, "Spore error: {}", e),
         }
     }
 }

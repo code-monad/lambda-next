@@ -13,10 +13,12 @@ mod config;
 mod query;
 mod utils;
 mod ws;
+mod spore;
 
 use ckb::CkbClient;
 use config::Config;
 use utils::{AppError, Result, SharedState};
+use spore::preload_type_id_files;
 
 // Channels for coordinating shutdown
 struct ShutdownChannels {
@@ -56,6 +58,13 @@ async fn main() -> Result<()> {
         error!("Failed to load configuration: {}", e);
         AppError::ConfigError(e)
     })?;
+
+    // Preload Type IDs from all configured files
+    info!("Preloading Type IDs from configured files...");
+    if let Err(e) = preload_type_id_files(&config.spore_filters) {
+        error!("Failed to preload Type IDs: {}", e);
+        // Continue execution, as this is not fatal
+    }
 
     // Parse the WebSocket URL
     let url = Url::parse(&config.websocket.url).map_err(|e| {
@@ -201,6 +210,7 @@ async fn main() -> Result<()> {
                     let interval_secs = ckb_config.query_interval_secs;
                     let shutdown_sender = shutdown.sender();
                     let mut shutdown_receiver_clone = shutdown.receiver();
+                    let query_config = config.clone();
 
                     info!("Starting query task");
                     let query_handle = tokio::spawn(async move {
@@ -225,6 +235,7 @@ async fn main() -> Result<()> {
                                 hash_type.clone(),
                                 limit,
                                 query_state.clone(),
+                                query_config.clone(),
                             )
                             .await;
 
