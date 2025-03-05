@@ -32,4 +32,4 @@ impl Config {
         let config = config_builder.build()?;
         Ok(config.try_deserialize()?)
     }
-} 
+}

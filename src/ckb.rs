@@ -1,13 +1,13 @@
 use ckb_jsonrpc_types::Uint32;
-use serde_json::{json, Value};
 use futures::SinkExt;
-use tokio_tungstenite::tungstenite::protocol::Message;
+use serde_json::{Value, json};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tracing::{debug, error, field, info, instrument, warn};
 use uuid::Uuid;
-use tracing::{info, warn, error, debug, instrument, field};
 
 #[derive(Debug)]
 pub enum CkbError {
@@ -69,19 +69,19 @@ pub struct CkbClient {
 
 // Type alias for the WebSocket writer
 type WsWriter = futures::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, 
-    Message
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
 >;
 
 impl CkbClient {
     /// Create a new CKB client with a direct writer
     pub fn new(writer: WsWriter) -> Self {
-        Self { 
+        Self {
             writer: Arc::new(Mutex::new(writer)),
             id_counter: Arc::new(Mutex::new(1)),
         }
     }
-    
+
     /// Create a new CKB client with an already shared writer
     pub fn with_shared_writer(writer: Arc<Mutex<WsWriter>>) -> Self {
         Self {
@@ -95,25 +95,25 @@ impl CkbClient {
         let mut counter = self.id_counter.lock().await;
         let _id = *counter;
         *counter += 1;
-        
+
         // Generate a UUID v4 (random)
         let uuid = Uuid::new_v4();
-        
+
         // Convert the first 8 bytes of the UUID to a u64
         // This maintains the uniqueness while providing a numeric ID
         let uuid_bytes = uuid.as_bytes();
         let mut uuid_u64 = 0u64;
-        
+
         // Combine the first 8 bytes into a u64
         for i in 0..8 {
             uuid_u64 = (uuid_u64 << 8) | (uuid_bytes[i] as u64);
         }
-        
+
         // Make sure the ID is never zero (JSON-RPC requires non-zero IDs)
         if uuid_u64 == 0 {
             uuid_u64 = 1;
         }
-        
+
         debug!("Generated request ID from UUID: {} ({})", uuid_u64, uuid);
         uuid_u64
     }
@@ -132,7 +132,7 @@ impl CkbClient {
         } else {
             info!("Starting new cell query");
         }
-        
+
         // Create search key using script type enum
         let search_key = json!({
             "script": {
@@ -162,7 +162,7 @@ impl CkbClient {
     pub async fn call_rpc(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.get_next_id().await;
         tracing::Span::current().record("id", &id);
-        
+
         let request_body = json!({
             "id": id,
             "jsonrpc": "2.0",
@@ -172,12 +172,13 @@ impl CkbClient {
 
         // Convert to string
         let request_str = request_body.to_string();
-        
+
         debug!("Sending JSON-RPC request: {}", request_str);
-        
+
         // Send the request through the WebSocket
         let mut writer = self.writer.lock().await;
-        writer.send(Message::Text(request_str.into()))
+        writer
+            .send(Message::Text(request_str.into()))
             .await
             .map_err(|e| {
                 error!("WebSocket send error: {}", e);
@@ -193,25 +194,26 @@ impl CkbClient {
     #[instrument(skip(self, response))]
     pub fn parse_cells_response(&self, response: &Value) -> Result<(Vec<Value>, Option<String>)> {
         debug!("Parsing get_cells response");
-        
+
         // Extract objects and next cursor from the response
         let objects = response
             .get("result")
             .and_then(|r| r.get("objects"))
             .and_then(|o| o.as_array())
             .ok_or_else(|| {
-                let err = CkbError::ParseError("Invalid response format: missing 'objects' array".into());
+                let err =
+                    CkbError::ParseError("Invalid response format: missing 'objects' array".into());
                 error!("Parse error: {}", err);
                 err
             })?
             .clone();
-        
+
         let last_cursor = response
             .get("result")
             .and_then(|r| r.get("last_cursor"))
             .and_then(|c| c.as_str())
             .map(String::from);
-        
+
         if let Some(cursor) = &last_cursor {
             debug!(cells_count = %objects.len(), cursor = %cursor, "Found cells with next cursor");
         } else {
@@ -220,4 +222,4 @@ impl CkbClient {
 
         Ok((objects, last_cursor))
     }
-} 
+}
