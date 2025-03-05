@@ -76,9 +76,18 @@ type WsWriter = futures::stream::SplitSink<
 >;
 
 impl CkbClient {
+    /// Create a new CKB client with a direct writer
     pub fn new(writer: WsWriter) -> Self {
         Self { 
             writer: Arc::new(Mutex::new(writer)),
+            id_counter: Arc::new(Mutex::new(1)),
+        }
+    }
+    
+    /// Create a new CKB client with an already shared writer
+    pub fn with_shared_writer(writer: Arc<Mutex<WsWriter>>) -> Self {
+        Self {
+            writer,
             id_counter: Arc::new(Mutex::new(1)),
         }
     }

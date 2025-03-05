@@ -1,246 +1,48 @@
 use futures::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, connect_async_tls_with_config, tungstenite::protocol::Message};
 use url::Url;
-use std::error::Error;
-use std::fmt;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use serde_json::Value;
-use std::collections::HashMap;
-use tracing::{info, warn, error, debug, trace, Level, instrument};
-use tracing_subscriber::{EnvFilter};
+use tokio::sync::{Mutex, oneshot, broadcast};
+use tracing::{info, warn, error, debug, Level, instrument};
+use tracing_subscriber::EnvFilter;
+use tokio::signal;
+use tokio::time::{Duration, Instant, sleep};
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 mod config;
 mod ckb;
+mod ws;
+mod query;
+mod utils;
 
 use config::Config;
-use ckb::{CkbClient, CkbError};
+use ckb::CkbClient;
+use utils::{Result, AppError, SharedState};
 
-#[derive(Debug)]
-enum AppError {
-    WebSocketError(tokio_tungstenite::tungstenite::Error),
-    ConfigError(Box<dyn Error + Send + Sync>),
-    UrlParseError(url::ParseError),
-    InvalidScheme(String),
-    CkbError(ckb::CkbError),
-    MessageHandlingError(String),
+// Channels for coordinating shutdown
+struct ShutdownChannels {
+    sender: broadcast::Sender<()>,
 }
 
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::WebSocketError(e) => write!(f, "WebSocket error: {}", e),
-            AppError::ConfigError(e) => write!(f, "Configuration error: {}", e),
-            AppError::UrlParseError(e) => write!(f, "URL parse error: {}", e),
-            AppError::InvalidScheme(s) => write!(f, "Invalid URL scheme: {}", s),
-            AppError::CkbError(e) => write!(f, "CKB error: {}", e),
-            AppError::MessageHandlingError(e) => write!(f, "Message handling error: {}", e),
-        }
+impl ShutdownChannels {
+    fn new() -> Self {
+        let (sender, _) = broadcast::channel(16);
+        Self { sender }
+    }
+    
+    fn sender(&self) -> broadcast::Sender<()> {
+        self.sender.clone()
+    }
+    
+    fn receiver(&self) -> broadcast::Receiver<()> {
+        self.sender.subscribe()
     }
 }
 
-impl Error for AppError {}
-
-impl From<ckb::CkbError> for AppError {
-    fn from(error: ckb::CkbError) -> Self {
-        AppError::CkbError(error)
-    }
-}
-
-type Result<T> = std::result::Result<T, AppError>;
-
-// Shared state for responses
-struct SharedState {
-    responses: HashMap<u64, Value>,
-}
-
-// Connect to a WebSocket server
-#[instrument(fields(url = %url))]
-async fn connect_to_websocket(url: Url) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
-    info!("Connecting to WebSocket server at {}", url);
-    
-    match url.scheme() {
-        "ws" | "wss" => {
-            // Both secure and non-secure connections are handled automatically by connect_async
-            let (ws_stream, _) = connect_async(url.as_str())
-                .await
-                .map_err(|e| {
-                    error!("WebSocket connection error: {}", e);
-                    AppError::WebSocketError(e)
-                })?;
-                
-            info!("WebSocket connection established");
-            Ok(ws_stream)
-        },
-        s => {
-            let error = AppError::InvalidScheme(s.to_string());
-            error!("Invalid URL scheme: {}", s);
-            Err(error)
-        }
-    }
-}
-
-// Handle incoming WebSocket messages and store responses
-#[instrument(skip(read, state))]
-async fn handle_websocket_messages(
-    mut read: futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
-    state: Arc<Mutex<SharedState>>,
-) -> Result<()> {
-    info!("Starting WebSocket message handler");
-    
-    while let Some(message) = read.next().await {
-        match message {
-            Ok(msg) => {
-                if let Message::Text(text) = msg {
-                    debug!("Received WebSocket message: {}", text);
-                    
-                    // Parse the JSON-RPC response
-                    match serde_json::from_str::<Value>(&text) {
-                        Ok(json) => {
-                            // Check if it's a JSON-RPC response with an ID
-                            if let Some(id) = json.get("id").and_then(|id| id.as_u64()) {
-                                info!(id = %id, "Received response for request");
-                                
-                                // Store the response in the shared state
-                                let mut state = state.lock().await;
-                                state.responses.insert(id, json.clone());
-                            }
-                            
-                            // Process cells from the response if it contains the result field
-                            if json.get("result").is_some() && json.get("method").is_none() {
-                                if let Some(result) = json.get("result") {
-                                    if let Some(objects) = result.get("objects") {
-                                        if let Some(objects_array) = objects.as_array() {
-                                            info!(count = %objects_array.len(), "Found cells in response");
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            warn!("Error parsing JSON message: {}", e);
-                        }
-                    }
-                }
-            },
-            Err(e) => {
-                error!("Error receiving WebSocket message: {}", e);
-                return Err(AppError::WebSocketError(e));
-            }
-        }
-    }
-    
-    info!("WebSocket message handler completed");
-    Ok(())
-}
-
-// Query for cells using WebSocket with proper request tracking and paging
-#[instrument(skip(client, state), fields(code_hash = %type_script_code_hash, hash_type = %hash_type, limit = %limit))]
-async fn query_cells_ws(
-    client: CkbClient, 
-    type_script_code_hash: String, 
-    hash_type: String, 
-    limit: u32,
-    state: Arc<Mutex<SharedState>>,
-) -> Result<()> {
-    info!("Starting cell query operation");
-    let mut cursor: Option<String> = None;
-    let mut total_cells = 0;
-    
-    loop {
-        info!(cursor = ?cursor, "Querying for cells");
-        
-        // Make the RPC call
-        let request = client.get_cells_by_type_script_code_hash(
-            &type_script_code_hash,
-            &hash_type,
-            limit,
-            cursor.as_deref(),
-        ).await?;
-        
-        // Get the request ID
-        let request_id = request.get("id").and_then(|id| id.as_u64()).unwrap_or(0);
-        info!(id = %request_id, "Request sent, waiting for response");
-        
-        // Wait for the response with matching ID
-        let response = wait_for_response(request_id, state.clone()).await?;
-        
-        // Process the response - extract cells and cursor for next page
-        let (cells, next_cursor) = match client.parse_cells_response(&response) {
-            Ok((cells, cursor)) => (cells, cursor),
-            Err(e) => {
-                error!("Failed to parse cells response: {}", e);
-                return Err(AppError::CkbError(e));
-            }
-        };
-        
-        // no cells means we're done
-        if cells.is_empty() {
-            info!("No cells found in response, ending query");
-            break;
-        }
-
-        // Process the cells
-        debug!(cells_count = %cells.len(), "Processing cells");
-        for (idx, cell) in cells.iter().enumerate() {
-            trace!(cell_idx = %idx, cell = ?cell, "Processing cell");
-            total_cells += 1;
-        }
-        
-        info!(page_count = %cells.len(), total_count = %total_cells, "Processed batch of cells");
-        
-        // If there's no next cursor, we're done
-        match next_cursor {
-            Some(next) => {
-                debug!(next_cursor = %next, "Continuing with next page");
-                cursor = Some(next);
-            }
-            None => {
-                info!(total_cells = %total_cells, "Query complete, no more pages");
-                break;
-            }
-        }
-        
-        // Small delay to prevent flooding
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-    
-    info!(total_cells = %total_cells, "Cell query operation completed");
-    Ok(())
-}
-
-// Helper function to wait for a response with a specific ID
-#[instrument(skip(state), fields(request_id = %request_id))]
-async fn wait_for_response(request_id: u64, state: Arc<Mutex<SharedState>>) -> Result<Value> {
-    debug!("Waiting for response");
-    
-    // Maximum time to wait for a response
-    let timeout = tokio::time::Duration::from_secs(30);
-    let start = tokio::time::Instant::now();
-    
-    while start.elapsed() < timeout {
-        // Check if we have a response for this ID
-        let response = {
-            let mut state_guard = state.lock().await;
-            state_guard.responses.remove(&request_id)
-        };
-        
-        if let Some(response) = response {
-            debug!("Response received within {} ms", start.elapsed().as_millis());
-            return Ok(response);
-        }
-        
-        // Wait a bit before checking again
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-    
-    let timeout_error = AppError::MessageHandlingError(format!(
-        "Timeout waiting for response to request ID: {}", 
-        request_id
-    ));
-    error!("Response timeout after {} ms: {}", timeout.as_millis(), timeout_error);
-    Err(timeout_error)
-}
+// A shared WebSocket writer that can be cloned and used by multiple tasks
+type WebSocketWriter = Arc<Mutex<futures::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message
+>>>;
 
 #[tokio::main]
 #[instrument]
@@ -251,7 +53,9 @@ async fn main() -> Result<()> {
         .with_ansi(true) // Use colors in terminal output
         .init();
     
-    info!("Starting lambda-next application");
+    // Start timing the application
+    let app_start_time = Instant::now();
+    info!("Starting application...");
     
     // Load configuration
     let config = Config::load().map_err(|e| {
@@ -259,101 +63,285 @@ async fn main() -> Result<()> {
         AppError::ConfigError(e)
     })?;
     
-    // Connect to the WebSocket server
+    // Parse the WebSocket URL
     let url = Url::parse(&config.websocket.url)
         .map_err(|e| {
             error!("Failed to parse WebSocket URL: {}", e);
             AppError::UrlParseError(e)
         })?;
     
-    let ws_stream = connect_to_websocket(url).await?;
-    info!("WebSocket connection established");
-    
     // Create shared state for responses
-    let state = Arc::new(Mutex::new(SharedState {
-        responses: HashMap::new(),
-    }));
+    let state = Arc::new(Mutex::new(SharedState::new()));
     
-    // Split the WebSocket stream
-    let (write, read) = ws_stream.split();
-    
-    // Create CKB client with the WebSocket writer
-    let ckb_client = CkbClient::new(write);
-    
-    // Spawn message handler task
+    // Create task to manage WebSocket connection with automatic reconnection
+    let ws_config = config.websocket.clone();
+    let url_clone = url.clone();
     let state_clone = state.clone();
-    info!("Starting WebSocket message handler task");
-    let receive_handle = tokio::spawn(async move {
-        handle_websocket_messages(read, state_clone).await
-    });
-    
-    // Get the query interval from config
-    let query_interval = tokio::time::Duration::from_secs(config.ckb.query_interval_secs);
-    info!(interval_secs = %config.ckb.query_interval_secs, "Query interval configured");
-    
-    // Loop forever, running queries at the specified interval
     let ckb_config = config.ckb.clone();
-    let state_clone = state.clone();
-    let query_loop_handle = tokio::spawn(async move {
-        // Small delay to ensure WebSocket connection is ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    
+    let connection_manager_handle = tokio::spawn(async move {
+        let mut last_error: Option<AppError> = None;
         
         loop {
-            info!("Starting query cycle");
-            
-            // Run a complete query
-            match query_cells_ws(
-                ckb_client.clone(),
-                ckb_config.type_script_code_hash.clone(),
-                ckb_config.type_script_hash_type.clone(), 
-                ckb_config.query_limit,
-                state_clone.clone()
-            ).await {
-                Ok(()) => {
-                    info!("Query cycle completed successfully");
+            match last_error {
+                Some(ref e) => {
+                    info!("Reconnecting after error: {}", e);
                 },
-                Err(e) => {
-                    error!("Query cycle failed: {}", e);
-                    // We don't exit on error, just continue with the next cycle
+                None => {
+                    info!("Establishing initial WebSocket connection");
                 }
             }
             
-            // Wait for the configured interval before starting the next query
-            info!(sleep_secs = %query_interval.as_secs(), "Sleeping until next query cycle");
-            tokio::time::sleep(query_interval).await;
+            // Attempt to connect with retry logic
+            match ws::connect_with_retry(url_clone.clone(), ws_config.clone()).await {
+                Ok(ws_stream) => {
+                    info!("WebSocket connection established");
+                    
+                    // Create shutdown channels
+                    let shutdown = ShutdownChannels::new();
+                    let mut shutdown_receiver = shutdown.receiver();
+                    
+                    // Split the WebSocket stream
+                    let (write, read) = ws_stream.split();
+                    
+                    // Wrap the writer in Arc<Mutex> so it can be shared between tasks
+                    let shared_writer = Arc::new(Mutex::new(write));
+                    
+                    // Create CKB client with a clone of the shared writer
+                    let ckb_client = CkbClient::with_shared_writer(shared_writer.clone());
+                    
+                    // Start a struct to track task completion
+                    let (task_complete_tx, task_complete_rx) = oneshot::channel();
+                    let mut task_complete_tx = Some(task_complete_tx);
+                    
+                    // Start message handler task
+                    let handler_state = state_clone.clone();
+                    info!("Starting WebSocket message handler");
+                    let receive_handle = tokio::spawn({
+                        async move {
+                            let result = ws::handle_websocket_messages(read, handler_state).await;
+                            match result {
+                                Ok(_) => {
+                                    info!("WebSocket message handler completed normally");
+                                },
+                                Err(e) => {
+                                    if let AppError::WebSocketError(ref ws_err) = e {
+                                        if ws::is_eof_error(ws_err) {
+                                            warn!("WebSocket closed with unexpected EOF - this is a normal disconnection");
+                                        } else {
+                                            error!("WebSocket message handler error: {}", e);
+                                        }
+                                    } else {
+                                        error!("WebSocket message handler error: {}", e);
+                                    }
+                                }
+                            }
+                            
+                            // Signal that this task has completed
+                            if let Some(tx) = task_complete_tx.take() {
+                                let _ = tx.send("ws_handler");
+                            }
+                        }
+                    });
+                    
+                    // Start ping task using the shared writer
+                    info!("Starting ping task with interval {} seconds", ws_config.ping_interval);
+                    let ping_writer = shared_writer.clone();
+                    let shutdown_sender = shutdown.sender();
+                    let mut shutdown_ping = shutdown.receiver();
+                    let ping_handle = tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(Duration::from_secs(ws_config.ping_interval));
+                        
+                        loop {
+                            // Check if shutdown requested
+                            if shutdown_ping.try_recv().is_ok() {
+                                info!("Ping task received shutdown request");
+                                break;
+                            }
+                            
+                            tokio::select! {
+                                _ = interval.tick() => {
+                                    debug!("Sending ping to keep WebSocket connection alive");
+                                    
+                                    // Lock the shared writer
+                                    let mut writer_guard = ping_writer.lock().await;
+                                    
+                                    // Send ping
+                                    match writer_guard.send(Message::Ping(vec![1, 2, 3, 4].into())).await {
+                                        Ok(_) => {
+                                            debug!("Ping sent successfully");
+                                        },
+                                        Err(e) => {
+                                            if ws::is_eof_error(&e) {
+                                                info!("Ping failed with EOF error - connection closed");
+                                            } else {
+                                                error!("Failed to send ping: {}", e);
+                                            }
+                                            
+                                            // Signal shutdown to other tasks
+                                            let _ = shutdown_sender.send(());
+                                            break;
+                                        }
+                                    }
+                                },
+                                Ok(_) = shutdown_ping.recv() => {
+                                    info!("Ping task received shutdown during sleep");
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        info!("Ping task shutting down gracefully");
+                    });
+                    
+                    // Start query task with shutdown channel
+                    let query_state = state_clone.clone();
+                    let type_script_code_hash = ckb_config.type_script_code_hash.clone();
+                    let hash_type = ckb_config.type_script_hash_type.clone();
+                    let limit = ckb_config.query_limit;
+                    let interval_secs = ckb_config.query_interval_secs;
+                    let shutdown_sender = shutdown.sender();
+                    let mut shutdown_receiver_clone = shutdown.receiver();
+                    
+                    info!("Starting query task");
+                    let query_handle = tokio::spawn(async move {
+                        let mut queries_run = 0;
+                        let mut total_query_time = Duration::from_secs(0);
+                        
+                        // Small delay to ensure connection is established
+                        sleep(Duration::from_millis(500)).await;
+                        
+                        loop {
+                            // Check if shutdown requested
+                            if shutdown_receiver_clone.try_recv().is_ok() {
+                                info!("Query task received shutdown request");
+                                break;
+                            }
+                            
+                            // Run the query
+                            let start = Instant::now();
+                            let query_result = query::query_cells_ws(
+                                ckb_client.clone(), 
+                                type_script_code_hash.clone(), 
+                                hash_type.clone(), 
+                                limit,
+                                query_state.clone()
+                            ).await;
+                            
+                            match query_result {
+                                Ok(_) => {
+                                    queries_run += 1;
+                                    let duration = start.elapsed();
+                                    total_query_time += duration;
+                                    let avg_duration = if queries_run > 0 {
+                                        total_query_time.as_secs_f64() / queries_run as f64
+                                    } else {
+                                        0.0
+                                    };
+                                    
+                                    info!(
+                                        queries_run = %queries_run,
+                                        avg_duration_secs = %avg_duration,
+                                        "Query cycle completed - sleeping before next run"
+                                    );
+                                },
+                                Err(e) => {
+                                    error!("Query failed: {}. Will try again at next interval.", e);
+                                    // Check if this is a connection error that should trigger reconnection
+                                    if let AppError::WebSocketError(_) = e {
+                                        error!("WebSocket error in query, triggering reconnection");
+                                        let _ = shutdown_sender.send(());
+                                        break;
+                                    }
+                                    // We don't exit on other query errors, just continue with the next cycle
+                                }
+                            }
+                            
+                            // Wait for either the interval timer or a shutdown signal
+                            tokio::select! {
+                                _ = sleep(Duration::from_secs(interval_secs)) => {
+                                    // Continue with the next loop iteration
+                                },
+                                Ok(_) = shutdown_receiver_clone.recv() => {
+                                    info!("Query task received shutdown during sleep");
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        info!("Query task shutting down gracefully");
+                    });
+                    
+                    // Wait for either a task to complete or a shutdown signal
+                    let reason = tokio::select! {
+                        task = task_complete_rx => {
+                            match task {
+                                Ok(name) => {
+                                    warn!("Task {} completed, triggering reconnection", name);
+                                    format!("Task {} exited", name)
+                                },
+                                Err(_) => {
+                                    warn!("Task completion channel closed");
+                                    "Task completion channel closed".to_string()
+                                }
+                            }
+                        },
+                        Ok(_) = shutdown_receiver.recv() => {
+                            info!("Received shutdown signal");
+                            "Shutdown requested".to_string()
+                        }
+                    };
+                    
+                    // Signal shutdown to all tasks
+                    info!("Shutting down all tasks: {}", reason);
+                    let _ = shutdown.sender().send(());
+                    
+                    // Cancel all running tasks
+                    receive_handle.abort();
+                    ping_handle.abort();
+                    query_handle.abort();
+                    
+                    // Short delay before reconnecting
+                    info!("WebSocket connection issue detected, preparing to reconnect...");
+                    sleep(Duration::from_secs(1)).await;
+                    
+                    // Set the error for reconnection
+                    last_error = Some(AppError::MessageHandlingError(reason));
+                },
+                Err(e) => {
+                    error!("Failed to establish WebSocket connection: {}", e);
+                    last_error = Some(e);
+                    
+                    // Short delay before reconnecting
+                    sleep(Duration::from_secs(5)).await;
+                }
+            }
         }
     });
     
     // Create a future that completes when CTRL+C is pressed
-    let ctrl_c = tokio::signal::ctrl_c();
+    let ctrl_c = signal::ctrl_c();
     
-    // Wait for the query loop, the WebSocket connection to close, or CTRL+C
-    info!("Waiting for tasks to complete or shutdown signal");
+    // Wait for CTRL+C signal
+    info!("Application running. Press Ctrl+C to stop.");
     tokio::select! {
-        _ = query_loop_handle => {
-            error!("Query loop exited unexpectedly");
-            return Err(AppError::MessageHandlingError("Query loop exited unexpectedly".into()));
-        }
-        receive_result = receive_handle => {
-            match receive_result {
-                Ok(Ok(())) => {
-                    info!("WebSocket connection closed gracefully");
-                }
-                Ok(Err(e)) => {
-                    warn!("WebSocket handler exited with error: {}", e);
-                    return Err(e);
-                }
-                Err(e) => {
-                    error!("WebSocket handler task panicked: {}", e);
-                    return Err(AppError::MessageHandlingError(format!("Task panic: {}", e)));
-                }
-            }
+        _ = connection_manager_handle => {
+            error!("Connection manager exited unexpectedly");
+            return Err(AppError::MessageHandlingError("Connection manager exited unexpectedly".into()));
         }
         _ = ctrl_c => {
             info!("Received shutdown signal, gracefully terminating");
         }
     }
     
-    info!("Application shutting down");
+    // total application runtime. just for measuring
+    let app_runtime = app_start_time.elapsed();
+    
+    info!(
+        runtime_ms = %app_runtime.as_millis(),
+        runtime_secs = %app_runtime.as_secs_f64(),
+        runtime_mins = %(app_runtime.as_secs() as f64 / 60.0),
+        "Application shutting down"
+    );
     Ok(())
 }
