@@ -1,6 +1,4 @@
-use ckb_jsonrpc_types::{
-    CellOutput, OutPoint, Script, Uint32, Capacity,
-};
+use ckb_jsonrpc_types::Uint32;
 use serde_json::{json, Value};
 use futures::SinkExt;
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -9,7 +7,7 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use tracing::{info, warn, error, debug, trace, instrument, field};
+use tracing::{info, warn, error, debug, instrument, field};
 
 #[derive(Debug)]
 pub enum CkbError {
@@ -95,7 +93,7 @@ impl CkbClient {
     async fn get_next_id(&self) -> u64 {
         // We still increment the counter for debugging/logging purposes
         let mut counter = self.id_counter.lock().await;
-        let id = *counter;
+        let _id = *counter;
         *counter += 1;
         
         // Generate a UUID v4 (random)

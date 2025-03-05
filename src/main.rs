@@ -38,12 +38,6 @@ impl ShutdownChannels {
     }
 }
 
-// A shared WebSocket writer that can be cloned and used by multiple tasks
-type WebSocketWriter = Arc<Mutex<futures::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-    Message
->>>;
-
 #[tokio::main]
 #[instrument]
 async fn main() -> Result<()> {
