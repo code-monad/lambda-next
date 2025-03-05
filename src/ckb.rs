@@ -223,3 +223,4 @@ impl CkbClient {
         Ok((objects, last_cursor))
     }
 }
+
