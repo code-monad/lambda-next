@@ -14,6 +14,7 @@ mod query;
 mod utils;
 mod ws;
 mod spore;
+mod db;
 
 use ckb::CkbClient;
 use config::Config;
@@ -58,6 +59,35 @@ async fn main() -> Result<()> {
         error!("Failed to load configuration: {}", e);
         AppError::ConfigError(e)
     })?;
+    info!("Configuration loaded successfully");
+
+    // Initialize database if enabled
+    let db = if let Some(db_config) = &config.database {
+        if db_config.enabled {
+            info!("Initializing database connection");
+            let db_config_for_db = db::DbConfig {
+                url: db_config.url.clone(),
+                max_connections: db_config.max_connections,
+            };
+            
+            match db::SporeDb::new(&db_config_for_db).await {
+                Ok(db) => {
+                    info!("Database connection established successfully");
+                    Some(Arc::new(db))
+                }
+                Err(e) => {
+                    error!("Failed to connect to database: {}", e);
+                    None
+                }
+            }
+        } else {
+            info!("Database is disabled in configuration");
+            None
+        }
+    } else {
+        info!("No database configuration found");
+        None
+    };
 
     // Preload Type IDs from all configured files
     info!("Preloading Type IDs from configured files...");
@@ -213,6 +243,7 @@ async fn main() -> Result<()> {
                     let query_config = config.clone();
 
                     info!("Starting query task");
+                    let db_clone = db.as_ref().map(|db_arc| db_arc.clone()); // Properly clone Option<Arc<T>>
                     let query_handle = tokio::spawn(async move {
                         let mut queries_run = 0;
                         let mut total_query_time = Duration::from_secs(0);
@@ -229,6 +260,7 @@ async fn main() -> Result<()> {
 
                             // Run the query
                             let start = Instant::now();
+                            let db_for_query = db_clone.clone(); // Clone again for each loop iteration
                             let query_result = query::query_cells_ws(
                                 ckb_client.clone(),
                                 type_script_code_hash.clone(),
@@ -236,6 +268,7 @@ async fn main() -> Result<()> {
                                 limit,
                                 query_state.clone(),
                                 query_config.clone(),
+                                db_for_query,  // Use the cloned value
                             )
                             .await;
 

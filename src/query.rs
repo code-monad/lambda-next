@@ -8,9 +8,10 @@ use crate::ckb::CkbClient;
 use crate::config::Config;
 use crate::spore::process_cells_with_filters;
 use crate::utils::{Result, SharedState, wait_for_response};
+use crate::db::SporeDb;
 
 /// Query for cells using WebSocket with proper request tracking and paging
-#[instrument(skip(client, state, config), fields(code_hash = %type_script_code_hash, hash_type = %hash_type, limit = %limit))]
+#[instrument(skip(client, state, config, db), fields(code_hash = %type_script_code_hash, hash_type = %hash_type, limit = %limit))]
 pub async fn query_cells_ws(
     client: CkbClient,
     type_script_code_hash: String,
@@ -18,6 +19,7 @@ pub async fn query_cells_ws(
     limit: u32,
     state: Arc<Mutex<SharedState>>,
     config: Config,
+    db: Option<Arc<SporeDb>>,
 ) -> Result<()> {
     // Start timing the query cycle
     let query_start_time = Instant::now();
@@ -73,8 +75,9 @@ pub async fn query_cells_ws(
         if !cells.is_empty() {
             debug!("Processing {} cells", cells.len());
             
-            // Apply filters and process cells
-            process_cells_with_filters(&cells, &config.spore_filters).await?;
+            // Apply filters and process cells with database connection
+            let db_ref = db.as_ref();
+            process_cells_with_filters(&cells, &config.spore_filters, &config.ckb, db_ref).await?;
         }
 
         // Check if we have more pages

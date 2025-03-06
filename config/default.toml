@@ -4,10 +4,17 @@ reconnect_interval = 5000    # milliseconds
 ping_interval = 30000        # milliseconds
 
 [ckb]
-type_script_code_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"  # Example code hash (TYPE_ID)
+type_script_code_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"  # Example code hash (Spore)
 type_script_hash_type = "data1"     # Can be "type" or "data1"
 query_limit = 300                   # Number of cells to fetch per query 
 query_interval_secs = 10            # Number of seconds to wait between queries
+network_type = "mainnet"            # Network type: "mainnet", "testnet", or "devnet"
+
+# Database configuration
+[database]
+enabled = true  # Set to true to enable database storage
+url = "postgres://postgres:postgres@localhost/spore_db"  # PostgreSQL connection string
+max_connections = 5  # Maximum number of connections in the pool
 
 # Spore filter configurations
 [[spore_filters]]
@@ -28,4 +35,4 @@ cluster_id = ""
 filter_by_type_ids = true
 type_ids = []                        # No inline Type IDs, all from JSON file
 type_ids_file = "config/NervapeInfo.json" # JSON file with Type IDs from typeInfo.args
-skip_decoding = true
+skip_decoding = false

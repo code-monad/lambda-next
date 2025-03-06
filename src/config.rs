@@ -1,11 +1,13 @@
 use serde::Deserialize;
 use std::error::Error;
+use ckb_sdk::NetworkType;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub websocket: WebSocketConfig,
     pub ckb: CkbConfig,
     pub spore_filters: Vec<SporeFilterConfig>,
+    pub database: Option<DatabaseConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -21,6 +23,25 @@ pub struct CkbConfig {
     pub type_script_hash_type: String,
     pub query_limit: u32,
     pub query_interval_secs: u64,
+    pub network_type: NetworkTypeConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkTypeConfig {
+    Mainnet,
+    Testnet,
+    Devnet,
+}
+
+impl From<NetworkTypeConfig> for NetworkType {
+    fn from(config: NetworkTypeConfig) -> Self {
+        match config {
+            NetworkTypeConfig::Mainnet => NetworkType::Mainnet,
+            NetworkTypeConfig::Testnet => NetworkType::Testnet,
+            NetworkTypeConfig::Devnet => NetworkType::Dev,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -33,6 +54,13 @@ pub struct SporeFilterConfig {
     pub type_ids: Vec<String>,
     pub type_ids_file: Option<String>,
     pub skip_decoding: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub max_connections: u32,
 }
 
 impl Config {
