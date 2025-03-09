@@ -1649,6 +1649,7 @@ dependencies = [
 name = "lambda-next"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ckb-jsonrpc-types",
  "ckb-sdk",
  "ckb-types",
@@ -1657,6 +1658,7 @@ dependencies = [
  "hex",
  "lazy_static",
  "molecule 0.7.5",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",

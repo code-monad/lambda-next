@@ -15,6 +15,7 @@ mod utils;
 mod ws;
 mod spore;
 mod db;
+mod dob_decoder;
 
 use ckb::CkbClient;
 use config::Config;

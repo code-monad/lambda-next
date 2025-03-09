@@ -8,6 +8,7 @@ pub struct Config {
     pub ckb: CkbConfig,
     pub spore_filters: Vec<SporeFilterConfig>,
     pub database: Option<DatabaseConfig>,
+    pub dob_decoder: Option<crate::dob_decoder::DobDecoderConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

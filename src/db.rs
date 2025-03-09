@@ -2,7 +2,7 @@ use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use std::error::Error;
-use tracing::{info, debug};
+use tracing::{info, debug, trace};
 
 
 /// Database configuration parameters
@@ -118,12 +118,34 @@ impl SporeDb {
     pub async fn upsert_spore(&self, spore: &DbSporeData) -> Result<(), sqlx::Error> {
         debug!("Upserting spore with ID: {}", spore.id);
         
+        // Check if the record already exists and has DOB data
+        let existing_spore = self.get_spore_by_id(&spore.id).await?;
+        
         // Convert the dob_content to a JSON value if it exists
         let (render_output, dob_content) = match &spore.dob_decode_output {
-            Some(decode) => (Some(&decode.render_output), Some(&decode.dob_content)),
-            None => (None, None),
+            Some(decode) => {
+                trace!("DOB decode output available for ID {}", spore.id);
+                (Some(&decode.render_output), Some(&decode.dob_content))
+            },
+            None => {
+                // If no new DOB data but we have existing DOB data, preserve it
+                if let Some(existing) = &existing_spore {
+                    if let Some(existing_dob) = &existing.dob_decode_output {
+                        trace!("Preserving existing DOB decode output for ID {}", spore.id);
+                        (Some(&existing_dob.render_output), Some(&existing_dob.dob_content))
+                    } else {
+                        trace!("No DOB decode output for ID {}", spore.id);
+                        (None, None)
+                    }
+                } else {
+                    trace!("No DOB decode output for ID {}", spore.id);
+                    (None, None)
+                }
+            },
         };
         
+        trace!("Database insert/update for ID {}", spore.id);
+
         sqlx::query(
             r#"
             INSERT INTO spores 
@@ -137,8 +159,8 @@ impl SporeDb {
                 index = EXCLUDED.index,
                 owner = EXCLUDED.owner,
                 capacity = EXCLUDED.capacity,
-                render_output = EXCLUDED.render_output,
-                dob_content = EXCLUDED.dob_content
+                render_output = COALESCE(EXCLUDED.render_output, spores.render_output),
+                dob_content = COALESCE(EXCLUDED.dob_content, spores.dob_content)
             "#,
         )
         .bind(&spore.id)

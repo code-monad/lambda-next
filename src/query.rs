@@ -77,7 +77,8 @@ pub async fn query_cells_ws(
             
             // Apply filters and process cells with database connection
             let db_ref = db.as_ref();
-            process_cells_with_filters(&cells, &config.spore_filters, &config.ckb, db_ref).await?;
+            process_cells_with_filters(&cells, &config.spore_filters, &config.ckb, db_ref).await
+                .map_err(|e| crate::utils::AppError::SporeError(e.to_string()))?;
         }
 
         // Check if we have more pages

@@ -26,3 +26,7 @@ molecule = "0.7.5"
 lazy_static = "1.4.0"
 # Database
 sqlx = { version = "0.7", features = ["tls-native-tls", "postgres", "json", "macros", "runtime-tokio"] }
+# HTTP client for JSON-RPC
+reqwest = { version = "0.11", features = ["json"] }
+# Error handling
+anyhow = "1.0"

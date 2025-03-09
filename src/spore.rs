@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use lazy_static::lazy_static;
+use anyhow::{anyhow, Result};
 
 // Add imports for CKB address handling
 use ckb_jsonrpc_types::Script;
@@ -24,7 +25,6 @@ use ckb_sdk::{
 };
 
 use crate::config::{SporeFilterConfig, CkbConfig};
-use crate::utils::{AppError, Result};
 use std::str::FromStr;
 use crate::db::{DbSporeData, ServerDecodeResult};
 
@@ -109,7 +109,7 @@ fn extract_type_id(cell: &Value) -> Option<String> {
 pub fn decode_spore_data(cell: &Value) -> Result<NativeNFTData> {
     // Extract Type ID for cache lookup
     let type_id = extract_type_id(cell)
-        .ok_or_else(|| AppError::SporeError("Cell has no Type ID for cache lookup".to_string()))?;
+        .ok_or_else(|| anyhow!("Cell has no Type ID for cache lookup"))?;
 
     // Try to get from cache first
     let cache = SPORE_CACHE.lock().unwrap();
@@ -123,7 +123,7 @@ pub fn decode_spore_data(cell: &Value) -> Result<NativeNFTData> {
     let data_hex = cell
         .get("output_data")
         .and_then(|data| data.as_str())
-        .ok_or_else(|| AppError::SporeError("Cell has no data field".to_string()))?;
+        .ok_or_else(|| anyhow!("Cell has no data field"))?;
 
     // Remove 0x prefix if present
     let data_hex = data_hex.trim_start_matches("0x");
@@ -131,13 +131,13 @@ pub fn decode_spore_data(cell: &Value) -> Result<NativeNFTData> {
     // Convert hex to bytes
     let data = hex::decode(data_hex).map_err(|e| {
         error!("Failed to decode hex data: {}", e);
-        AppError::SporeError(format!("Failed to decode hex data: {}", e))
+        anyhow!("Failed to decode hex data: {}", e)
     })?;
 
     // Parse SporeData from bytes
     let spore_data = SporeData::from_compatible_slice(&data).map_err(|e| {
         error!("Failed to parse SporeData: {}", e);
-        AppError::SporeError(format!("Failed to parse SporeData: {}", e))
+        anyhow!("Failed to parse SporeData: {}", e)
     })?;
 
     // Convert to native representation (manually)
@@ -503,6 +503,69 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
 pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::db::SporeDb>>) -> Result<()> {
     info!("Processing {} spore cells", cells.len());
 
+    // First, identify DOB spores that need decoding
+    let config = crate::config::Config::load().map_err(|e| anyhow!("Failed to load config: {}", e))?;
+    let skip_decoding = cells.iter().all(|cell| {
+        if let Some(filter) = config.spore_filters.iter().find(|f| f.enabled) {
+            filter.skip_decoding
+        } else {
+            false
+        }
+    });
+
+    // Separate DOB spores that need decoding
+    let mut dob_spores = Vec::new();
+    if !skip_decoding && config.dob_decoder.is_some() && config.dob_decoder.as_ref().unwrap().enabled {
+        for (index, cell) in cells.iter().enumerate() {
+            if let Some(data) = &cell.spore_data {
+                // Only process DOB spores that haven't been decoded yet
+                if data.content_type.starts_with("dob/") {
+                    if let Some(type_id) = &cell.type_id {
+                        // Check if already decoded by looking up in DB
+                        let already_decoded = if let Some(db) = db {
+                            if let Ok(Some(spore)) = db.get_spore_by_id(type_id).await {
+                                spore.dob_decode_output.is_some()
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if !already_decoded {
+                            // Convert Vec<u8> to hex String for the JSON-RPC API
+                            let content_str = hex::encode(&data.content);
+                            dob_spores.push((type_id.clone(), content_str));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Process DOB spores in batches if there are any
+    let mut decoded_results = std::collections::HashMap::new();
+    if !dob_spores.is_empty() && config.dob_decoder.is_some() {
+        let decoder_config = config.dob_decoder.unwrap();
+        let decoder = crate::dob_decoder::DobDecoder::new(decoder_config.clone());
+        
+        // Split into batches
+        let batches = crate::dob_decoder::batch_items(dob_spores, decoder_config.batch_size);
+        
+        for (batch_idx, batch) in batches.into_iter().enumerate() {
+            debug!("Processing DOB batch {}, size: {}", batch_idx, batch.len());
+            
+            // Send batch request
+            let results = decoder.decode_batch(batch).await;
+            
+            // Store results
+            for (id, result) in results {
+                decoded_results.insert(id, result);
+            }
+        }
+    }
+
+    // Process all cells as before, but now with decode results available
     for (index, cell) in cells.iter().enumerate() {
         match &cell.spore_data {
             Some(data) => {
@@ -514,8 +577,8 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
                     cell.cluster_id.as_deref().unwrap_or("None")
                 );
 
-                // Process the individual cell
-                if let Err(e) = process_single_spore(cell, db).await {
+                // Process the individual cell with decoded DOB data if available
+                if let Err(e) = process_single_spore_with_dob(cell, db, &decoded_results).await {
                     warn!("Error processing spore cell {}: {}", index, e);
                     // Continue processing other cells
                 }
@@ -536,6 +599,44 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
     Ok(())
 }
 
+/// Process a single spore cell with potential DOB decode results
+///
+/// This is a helper function that calls the original process_single_spore
+/// but with DOB decode results if available
+async fn process_single_spore_with_dob(
+    cell: &SporeCell, 
+    db: Option<&Arc<crate::db::SporeDb>>,
+    dob_results: &std::collections::HashMap<String, Result<crate::db::ServerDecodeResult, Box<dyn std::error::Error + Send + Sync>>>
+) -> Result<()> {
+    // NOTE: We're wrapping process_single_spore to avoid modifying it directly,
+    // per the requirement to preserve its behavior.
+    // DOB decode results are passed to the database separately when creating the DbSporeData.
+    
+    // Process the spore normally
+    process_single_spore(cell, db).await?;
+    
+    // If we have DOB results and a database, update the record with the DOB data
+    if let (Some(db), Some(type_id)) = (db, &cell.type_id) {
+        if let Some(dob_result) = dob_results.get(type_id) {
+            if let Ok(server_result) = dob_result {
+                if let Some(mut spore_data) = cell.to_spore_data() {
+                    // The JSON-RPC response already contains properly structured DOB decode output,
+                    // use it directly as provided by the server
+                    spore_data.dob_decode_output = Some(server_result.clone());
+                    
+                    // Update the database
+                    debug!("Updating spore in database with DOB decode output: {}", spore_data.id);
+                    if let Err(e) = db.upsert_spore(&spore_data).await {
+                        error!("Failed to update spore in database with DOB decode output: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
+
 /// Initialize the Type ID cache by preloading all files specified in filter configurations
 pub fn preload_type_id_files(filters: &[SporeFilterConfig]) -> Result<()> {
     for filter in filters {
@@ -547,8 +648,8 @@ pub fn preload_type_id_files(filters: &[SporeFilterConfig]) -> Result<()> {
                     }
                     Err(err) => {
                         error!("Failed to preload Type IDs from file '{}': {}", file_path, err);
-                        // Convert the box error to AppError
-                        return Err(AppError::SporeError(format!("Failed to load Type IDs from {}: {}", file_path, err)));
+                        // Convert the box error to anyhow::Error
+                        return Err(anyhow!("Failed to load Type IDs from {}: {}", file_path, err));
                     }
                 }
             }
@@ -560,201 +661,36 @@ pub fn preload_type_id_files(filters: &[SporeFilterConfig]) -> Result<()> {
 impl SporeCell {
     /// Convert SporeCell to SporeData for database storage
     pub fn to_spore_data(&self) -> Option<DbSporeData> {
-        // Log the starting point
-        debug!("Starting to_spore_data conversion");
+        // Extract the Type ID
+        let type_id = self.type_id.as_ref()?;
         
-        // Check if type_id exists
-        let type_id = match self.type_id.as_ref() {
-            Some(id) => id,
-            None => {
-                error!("Missing type_id in SporeCell");
-                return None;
-            }
+        // Extract cell details
+        let tx_hash = self.raw_cell.get("out_point")
+            .and_then(|out_point| out_point.get("tx_hash"))
+            .and_then(|tx_hash| tx_hash.as_str())
+            .unwrap_or("unknown").to_string();
+        
+        let index = self.raw_cell.get("out_point")
+            .and_then(|out_point| out_point.get("index"))
+            .and_then(|index| index.as_u64())
+            .unwrap_or(0) as u32;
+        
+        // Extract capacity
+        let capacity = self.raw_cell.get("output")
+            .and_then(|output| output.get("capacity"))
+            .and_then(|capacity| capacity.as_str())
+            .unwrap_or("0").to_string();
+        
+        // Get owner from lock script
+        let lock = self.raw_cell.get("output")
+            .and_then(|output| output.get("lock"));
+        
+        let owner = if let Some(lock) = lock {
+            Self::extract_owner_from_lock(lock, self.network_type)
+                .unwrap_or_else(|| "unknown".to_string())
+        } else {
+            "unknown".to_string()
         };
-        debug!("Processing cell with type_id: {}", type_id);
-        
-        let raw_cell = &self.raw_cell;
-        
-        // Extract required fields from the raw cell
-        debug!("Extracting output field");
-        let output = match raw_cell.get("output") {
-            Some(o) => o,
-            None => {
-                error!("Missing 'output' field in cell: {:?}", raw_cell);
-                return None;
-            }
-        };
-        
-        // Get out_point for tx_hash and index
-        debug!("Extracting out_point field");
-        let out_point = match raw_cell.get("out_point") {
-            Some(op) => op,
-            None => {
-                error!("Missing 'out_point' field in cell: {:?}", raw_cell);
-                return None;
-            }
-        };
-        
-        debug!("Extracting tx_hash from out_point");
-        let tx_hash = match out_point.get("tx_hash") {
-            Some(hash) => match hash.as_str() {
-                Some(s) => s.to_string(),
-                None => {
-                    error!("tx_hash is not a string: {:?}", hash);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'tx_hash' in out_point: {:?}", out_point);
-                return None;
-            }
-        };
-        debug!("Extracted tx_hash: {}", tx_hash);
-        
-        // Index is in out_point.index, not tx_index
-        debug!("Extracting index from out_point");
-        let index_str = match out_point.get("index") {
-            Some(idx) => match idx.as_str() {
-                Some(s) => s,
-                None => {
-                    error!("index is not a string: {:?}", idx);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'index' in out_point: {:?}", out_point);
-                return None;
-            }
-        };
-        
-        debug!("Parsing index from hex string: {}", index_str);
-        let index = match u32::from_str_radix(index_str.trim_start_matches("0x"), 16) {
-            Ok(i) => i,
-            Err(e) => {
-                error!("Failed to parse index '{}' as hex: {}", index_str, e);
-                return None;
-            }
-        };
-        debug!("Parsed index: {}", index);
-        
-        // Get capacity
-        debug!("Extracting capacity from output");
-        let capacity_str = match output.get("capacity") {
-            Some(cap) => match cap.as_str() {
-                Some(s) => s,
-                None => {
-                    error!("capacity is not a string: {:?}", cap);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'capacity' in output: {:?}", output);
-                return None;
-            }
-        };
-        
-        debug!("Parsing capacity from hex string: {}", capacity_str);
-        let capacity = capacity_str.to_string();
-        
-        // Get lock script for owner
-        debug!("Extracting lock script from output");
-        let lock = match output.get("lock") {
-            Some(l) => l,
-            None => {
-                error!("Missing 'lock' in output: {:?}", output);
-                return None;
-            }
-        };
-        
-        debug!("Creating CKB address from lock script");
-        
-        // Extract code_hash from lock script
-        let code_hash = match lock.get("code_hash") {
-            Some(ch) => match ch.as_str() {
-                Some(s) => s,
-                None => {
-                    error!("code_hash is not a string: {:?}", ch);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'code_hash' in lock: {:?}", lock);
-                return None;
-            }
-        };
-        
-        // Extract hash_type from lock script
-        let hash_type_str = match lock.get("hash_type") {
-            Some(ht) => match ht.as_str() {
-                Some(s) => s,
-                None => {
-                    error!("hash_type is not a string: {:?}", ht);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'hash_type' in lock: {:?}", lock);
-                return None;
-            }
-        };
-        
-        // Convert hash_type string to ScriptHashType
-        let hash_type = match hash_type_str {
-            "type" => ScriptHashType::Type,
-            "data" => ScriptHashType::Data,
-            "data1" => ScriptHashType::Data1,
-            "data2" => ScriptHashType::Data2,
-            _ => {
-                error!("Invalid hash_type: {}", hash_type_str);
-                return None;
-            }
-        };
-        
-        // Extract args from lock script
-        let args = match lock.get("args") {
-            Some(a) => match a.as_str() {
-                Some(s) => s.trim_start_matches("0x"),
-                None => {
-                    error!("args is not a string: {:?}", a);
-                    return None;
-                }
-            },
-            None => {
-                error!("Missing 'args' in lock: {:?}", lock);
-                return None;
-            }
-        };
-        
-        // Parse code_hash as H256
-        let code_hash_bytes = match H256::from_str(code_hash.trim_start_matches("0x")) {
-            Ok(ch) => ch,
-            Err(e) => {
-                error!("Failed to parse code_hash '{}': {}", code_hash, e);
-                return None;
-            }
-        };
-        
-        // Parse args as bytes
-        let args_bytes = match hex::decode(args) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("Failed to decode args '{}' as hex: {}", args, e);
-                return None;
-            }
-        };
-        
-        // Create owner address
-        let owner = Address::new(
-            self.network_type,
-            AddressPayload::Full {
-                hash_type,
-                code_hash: code_hash_bytes.pack(),
-                args: args_bytes.into(),
-            },
-            true, // Use short address format
-        ).to_string();
-        
-        debug!("Created owner address: {}", owner);
         
         // Get content type and content
         debug!("Determining content type");
@@ -812,39 +748,7 @@ impl SporeCell {
             }
         };
         
-        // For DOB (Digital Object Binary) content, prepare decoded output
-        debug!("Checking if DOB content needs decoding");
-        let dob_decode_output = if content_type.contains("dob") && self.spore_data.is_some() {
-            debug!("Processing DOB content");
-            let spore = match self.spore_data.as_ref() {
-                Some(s) => s,
-                None => {
-                    error!("Expected spore_data to be present for DOB content");
-                    return None;
-                }
-            };
-            
-            // This is a placeholder - in a real implementation you'd have custom DOB rendering logic
-            // For now, we'll serialize the content as JSON for the DOB rendering
-            let render_output = format!("DOB content of type: {}", content_type);
-            
-            // Create a JSON representation of the DOB content
-            let dob_content = serde_json::json!({
-                "type": content_type,
-                "size": spore.content.len(),
-                "hex": hex::encode(&spore.content[..std::cmp::min(100, spore.content.len())]) + "...",
-            });
-            
-            debug!("Created DOB decode output");
-            Some(ServerDecodeResult {
-                render_output,
-                dob_content,
-            })
-        } else {
-            debug!("No DOB decoding needed");
-            None
-        };
-        
+        // DOB decoding is now handled externally in process_spore_cells
         debug!("Successfully created DbSporeData");
         Some(DbSporeData {
             id: type_id.clone(),
@@ -855,7 +759,60 @@ impl SporeCell {
             index,
             owner,
             capacity,
-            dob_decode_output,
+            dob_decode_output: None, // Will be populated separately if needed
         })
+    }
+
+    /// Extract owner address from lock script
+    fn extract_owner_from_lock(lock: &Value, network_type: NetworkType) -> Option<String> {
+        // Extract code_hash from lock script
+        let code_hash = lock.get("code_hash")
+            .and_then(|ch| ch.as_str())?;
+        
+        // Extract hash_type from lock script
+        let hash_type_str = lock.get("hash_type")
+            .and_then(|ht| ht.as_str())?;
+        
+        // Convert hash_type string to ScriptHashType
+        let hash_type = match hash_type_str {
+            "type" => ScriptHashType::Type,
+            "data" => ScriptHashType::Data,
+            "data1" => ScriptHashType::Data1,
+            "data2" => ScriptHashType::Data2,
+            _ => {
+                error!("Invalid hash_type: {}", hash_type_str);
+                return None;
+            }
+        };
+        
+        // Extract args from lock script
+        let args = lock.get("args")
+            .and_then(|a| a.as_str())?
+            .trim_start_matches("0x");
+        
+        // Parse code_hash as H256
+        let code_hash_bytes = match H256::from_str(code_hash.trim_start_matches("0x")) {
+            Ok(hash) => hash,
+            Err(_) => return None,
+        };
+        
+        // Parse args as bytes
+        let args_bytes = match hex::decode(args) {
+            Ok(bytes) => bytes,
+            Err(_) => return None,
+        };
+        
+        // Create owner address
+        let owner = Address::new(
+            network_type,
+            AddressPayload::Full {
+                hash_type,
+                code_hash: code_hash_bytes.pack(),
+                args: args_bytes.into(),
+            },
+            true, // Use short address format
+        ).to_string();
+        
+        Some(owner)
     }
 }

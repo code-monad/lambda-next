@@ -1,5 +1,5 @@
 [websocket]
-url = "ws://localhost"  # WebSocket URL for CKB node
+url = "wss://ckb-sub-ws.nervape.com"  # WebSocket URL for CKB node
 reconnect_interval = 5000    # milliseconds
 ping_interval = 30000        # milliseconds
 
@@ -16,6 +16,11 @@ enabled = true  # Set to true to enable database storage
 url = "postgres://postgres:postgres@localhost/spore_db"  # PostgreSQL connection string
 max_connections = 5  # Maximum number of connections in the pool
 
+# DOB decoder configuration
+[dob_decoder]
+enabled = true  # Set to true to enable DOB decoding
+url = "https://api.nervape.com/decoder"  # DOB decoder JSON-RPC endpoint
+batch_size = 50  # Maximum number of spores to decode in a single batch request
 
 [[spore_filters]]
 name = "Nervape Collection Filter"      
