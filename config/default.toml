@@ -16,16 +16,6 @@ enabled = true  # Set to true to enable database storage
 url = "postgres://postgres:postgres@localhost/spore_db"  # PostgreSQL connection string
 max_connections = 5  # Maximum number of connections in the pool
 
-# Spore filter configurations
-[[spore_filters]]
-name = "Default Cluster Filter"      # Name of this filter for identification
-enabled = true                       # Whether this filter is active
-filter_by_cluster = true             # Filter cells by cluster ID
-cluster_id = "0x97dd2076edcb737cc0263a40744efa512c82ed54be9c1105c1c11f7603aae638"  # Cluster ID to filter by
-filter_by_type_ids = false           # Filter cells by their Type ID
-type_ids = []                        # List of Type IDs to filter by (empty means no filtering)
-type_ids_file = ""                   # Optional path to a file containing Type IDs (one per line)
-skip_decoding = false                # Skip decoding the cell data (useful for just collecting Type IDs)
 
 [[spore_filters]]
 name = "Nervape Collection Filter"      
@@ -36,3 +26,4 @@ filter_by_type_ids = true
 type_ids = []                        # No inline Type IDs, all from JSON file
 type_ids_file = "config/NervapeInfo.json" # JSON file with Type IDs from typeInfo.args
 skip_decoding = false
+exclude_cluster_ids = []             # List of cluster IDs to exclude for performance

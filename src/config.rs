@@ -54,6 +54,7 @@ pub struct SporeFilterConfig {
     pub type_ids: Vec<String>,
     pub type_ids_file: Option<String>,
     pub skip_decoding: bool,
+    pub exclude_cluster_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

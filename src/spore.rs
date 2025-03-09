@@ -313,6 +313,10 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
         std::collections::HashSet::new()
     };
 
+    // Create a set for excluded cluster IDs for faster lookup
+    let exclude_cluster_id_set: std::collections::HashSet<String> = 
+        filter.exclude_cluster_ids.iter().cloned().collect();
+
     let cluster_id_filter = if filter.filter_by_cluster {
         Some(filter.cluster_id.clone())
     } else {
@@ -362,6 +366,14 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
             Some(data) => extract_cluster_id(data),
             None => None,
         };
+
+        // Check if this cell's cluster ID is in the exclude list
+        if let Some(cell_cluster_id) = &cluster_id {
+            if !exclude_cluster_id_set.is_empty() && exclude_cluster_id_set.contains(cell_cluster_id) {
+                trace!("Skipping cell with excluded cluster ID: {}", cell_cluster_id);
+                continue;
+            }
+        }
 
         // Check if this cell's cluster ID matches our filter
         let cluster_id_matches = if let Some(filter_cluster_id) = &cluster_id_filter {
