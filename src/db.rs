@@ -303,4 +303,46 @@ impl SporeDb {
             }
         }).collect())
     }
+
+    /// Update only owner and capacity fields for a spore
+    /// This is an optimization for spores that are already fully populated
+    pub async fn update_spore_owner_capacity(&self, id: &str, owner: &str, capacity: &str) -> Result<(), sqlx::Error> {
+        debug!("Partial update (owner/capacity) for spore ID: {}", id);
+        
+        sqlx::query(
+            r#"
+            UPDATE spores 
+            SET owner = $2, capacity = $3
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(capacity)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+    
+    /// Check if a spore record is fully populated with DOB data
+    pub async fn is_dob_spore_fully_populated(&self, id: &str) -> Result<bool, sqlx::Error> {
+        let result: Option<(bool, bool)> = sqlx::query_as(
+            r#"
+            SELECT 
+                render_output IS NOT NULL as has_render_output,
+                dob_content IS NOT NULL as has_dob_content
+            FROM spores
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        Ok(match result {
+            Some((has_render_output, has_dob_content)) => has_render_output && has_dob_content,
+            None => false, // If record doesn't exist, it's not fully populated
+        })
+    }
 } 

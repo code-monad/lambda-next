@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::error::Error;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::db::ServerDecodeResult;
 
@@ -81,7 +81,7 @@ impl DobDecoder {
         let batch_requests = contents
             .iter()
             .enumerate()
-            .map(|(i, (id, content))| {
+            .map(|(i, (id, _))| {
                 // Remove 0x prefix from type ID if present
                 let clean_id = id.trim_start_matches("0x");
                 debug!("Creating request for ID: {}, clean ID: {}", id, clean_id);
@@ -240,12 +240,10 @@ fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResu
                 
                 // Check for different field naming patterns
                 let has_render_output = parsed.get("render_output").is_some();
-                let has_renderOutput = parsed.get("renderOutput").is_some();
                 let has_dob_content = parsed.get("dob_content").is_some();
-                let has_dobContent = parsed.get("dobContent").is_some();
                 
-                trace!("Field detection: render_output: {}, renderOutput: {}, dob_content: {}, dobContent: {}", 
-                     has_render_output, has_renderOutput, has_dob_content, has_dobContent);
+                trace!("Field detection: render_output: {},  dob_content: {}", 
+                     has_render_output, has_dob_content);
                 
                 // Extract fields with fallbacks
                 let render_output = parsed.get("render_output")
@@ -287,12 +285,9 @@ fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResu
         
         // Check for different field naming patterns
         let has_render_output = value.get("render_output").is_some();
-        let has_renderOutput = value.get("renderOutput").is_some();
         let has_dob_content = value.get("dob_content").is_some();
-        let has_dobContent = value.get("dobContent").is_some();
-        
-        trace!("Field detection: render_output: {}, renderOutput: {}, dob_content: {}, dobContent: {}", 
-             has_render_output, has_renderOutput, has_dob_content, has_dobContent);
+        trace!("Field detection: render_output: {},dob_content: {}", 
+             has_render_output, has_dob_content);
         
         // Extract fields with fallbacks
         let render_output = value.get("render_output")

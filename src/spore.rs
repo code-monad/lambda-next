@@ -348,16 +348,12 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
             continue;
         }
 
-        // Decode the cell data
-        let spore_data = if filter.skip_decoding {
-            None
-        } else {
-            match decode_spore_data(&cell) {
-                Ok(data) => Some(data),
-                Err(e) => {
-                    debug!("Failed to decode cell with Type ID {}: {}", type_id, e);
-                    None
-                }
+        // Decode the cell data - Always decode basic spore data regardless of skip_decoding
+        let spore_data = match decode_spore_data(&cell) {
+            Ok(data) => Some(data),
+            Err(e) => {
+                debug!("Failed to decode cell with Type ID {}: {}", type_id, e);
+                None
             }
         };
 
@@ -482,6 +478,87 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
     trace!("Raw cell: {:?}", cell.raw_cell);
     trace!("--------------------------------");
 
+    // If we have a database and a type ID, check optimization rules
+    if let (Some(db), Some(type_id)) = (db, &cell.type_id) {
+        // Standard processing for cells with spore_data
+        if let Some(spore_data) = &cell.spore_data {
+            // Extract required fields for partial update
+            let owner = if let Some(lock) = cell.raw_cell.get("output").and_then(|o| o.get("lock")) {
+                if let Some(owner) = SporeCell::extract_owner_from_lock(lock, cell.network_type) {
+                    owner
+                } else {
+                    // If we can't extract the owner, fall back to regular processing
+                    return process_regular_spore(cell, Some(db)).await;
+                }
+            } else {
+                // If lock script is missing, fall back to regular processing
+                return process_regular_spore(cell, Some(db)).await;
+            };
+            
+            // Extract capacity for partial update
+            let capacity = cell.raw_cell.get("output")
+                .and_then(|output| output.get("capacity"))
+                .and_then(|capacity| capacity.as_str())
+                .unwrap_or("0").to_string();
+            
+            // Situation #1: DOB spore with full data already
+            if spore_data.content_type.starts_with("dob/") {
+                // Check if this DOB spore is already fully populated
+                match db.is_dob_spore_fully_populated(type_id).await {
+                    Ok(true) => {
+                        // DOB spore is fully populated - do only partial update
+                        debug!("DOB spore is fully populated - performing partial update for: {}", type_id);
+                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity).await {
+                            error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
+                        }
+                        return Ok(());
+                    },
+                    Ok(false) => {
+                        // DOB spore exists but missing some data - proceed with full update
+                        debug!("DOB spore needs full update: {}", type_id);
+                    },
+                    Err(e) => {
+                        // Error checking DOB status - log and proceed with regular processing
+                        error!("Error checking DOB spore status: {}", e);
+                    }
+                }
+            }
+            // Situation #2: Generic spore (non-DOB)
+            else if !spore_data.content_type.starts_with("dob/") {
+                // Check if record exists
+                match db.get_spore_by_id(type_id).await {
+                    Ok(Some(_)) => {
+                        // Generic spore exists - do only partial update
+                        debug!("Generic spore exists - performing partial update for: {}", type_id);
+                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity).await {
+                            error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
+                        }
+                        return Ok(());
+                    },
+                    Ok(None) => {
+                        // Generic spore doesn't exist - proceed with full update
+                        debug!("Generic spore needs full insert: {}", type_id);
+                    },
+                    Err(e) => {
+                        // Error checking spore status - log and proceed with regular processing
+                        error!("Error checking generic spore status: {}", e);
+                    }
+                }
+            }
+        } else {
+            // If we get here with spore_data=None, that means decoding failed for some reason
+            // Just log an error and return
+            error!("Spore data decoding failed for cell with type_id: {}", type_id);
+            return Ok(());
+        }
+    }
+
+    // Fall back to regular processing if optimization rules don't apply
+    return process_regular_spore(cell, db).await;
+}
+
+/// Regular spore processing without optimizations (original implementation)
+async fn process_regular_spore(cell: &SporeCell, db: Option<&Arc<crate::db::SporeDb>>) -> Result<()> {
     // Convert to SporeData and store in database if DB is configured
     if let Some(db) = db {
         if let Some(spore_data) = cell.to_spore_data() {
@@ -489,8 +566,6 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
             if let Err(e) = db.upsert_spore(&spore_data).await {
                 error!("Failed to store spore in database: {}", e);
             }
-        } else {
-            error!("Could not convert spore cell to database format");
         }
     }
 
@@ -505,13 +580,12 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
 
     // First, identify DOB spores that need decoding
     let config = crate::config::Config::load().map_err(|e| anyhow!("Failed to load config: {}", e))?;
-    let skip_decoding = cells.iter().all(|cell| {
-        if let Some(filter) = config.spore_filters.iter().find(|f| f.enabled) {
-            filter.skip_decoding
-        } else {
-            false
-        }
-    });
+    let skip_decoding = config.spore_filters.iter().find(|f| f.enabled).map_or(false, |f| f.skip_decoding);
+
+    // If skip_decoding is true, log that we'll skip DOB decoding (but still process basic spore data)
+    if skip_decoding {
+        debug!("skip_decoding is enabled - will skip DOB decoding but process basic spore data");
+    }
 
     // Separate DOB spores that need decoding
     let mut dob_spores = Vec::new();
@@ -584,6 +658,7 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
                 }
             }
             None => {
+                // This case should be rare now that we're always decoding basic spore data
                 if let Some(type_id) = &cell.type_id {
                     warn!(
                         "Cell {} with Type ID {} could not be decoded as a valid spore",
