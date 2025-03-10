@@ -36,6 +36,21 @@ services:
       - LAMBDA_NEXT__DATABASE__URL=postgres://postgres:postgres@db:5432/spore_db
     command: ["./lambda_next"]
 
+  lambda-mainnet-low-tier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lambda-mainnet-low-tier
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    volumes:
+      - ./config/generic.toml:/app/config/default.toml
+    environment:
+      - LAMBDA_NEXT__DATABASE__URL=postgres://postgres:postgres@db:5432/spore_db
+    command: ["./lambda_next"]
+
   # Lambda Server - Testnet
   lambda-testnet:
     build:
