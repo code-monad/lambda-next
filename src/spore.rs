@@ -823,6 +823,13 @@ impl SporeCell {
             }
         };
         
+        // Convert network type
+        let network_type_str = match self.network_type {
+            NetworkType::Mainnet => Some("mainnet".to_string()),
+            NetworkType::Testnet => Some("testnet".to_string()),
+            _ => None,
+        };
+        
         // DOB decoding is now handled externally in process_spore_cells
         debug!("Successfully created DbSporeData");
         Some(DbSporeData {
@@ -835,6 +842,7 @@ impl SporeCell {
             owner,
             capacity,
             dob_decode_output: None, // Will be populated separately if needed
+            network_type: network_type_str,
         })
     }
 

@@ -3,6 +3,19 @@ name = "lambda-next"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [
+    "spore-api-server",
+]
+
+[lib]
+name = "lambda_next" 
+path = "src/lib.rs"
+
+[[bin]]
+name = "lambda_next"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1.36", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["connect", "native-tls"] }

@@ -1,0 +1,10 @@
+# API server configuration
+[api]
+address = "0.0.0.0"  # Listen on all interfaces
+port = 8088          # Port to listen on
+
+# Database connection - shares same config as main app
+[api.database]
+enabled = true
+url = "postgres://postgres:postgres@localhost/spore_db"
+max_connections = 5 
