@@ -9,6 +9,7 @@ use tracing::error;
 
 pub mod cluster;
 pub mod spore;
+pub mod address;
 
 /// Query parameters for API requests
 #[derive(Deserialize, Default)]

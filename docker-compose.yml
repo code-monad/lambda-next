@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: spore-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: spore_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Lambda Server - Mainnet
+  lambda-mainnet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lambda-mainnet
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    volumes:
+      - ./config/default.toml:/app/config/default.toml
+    environment:
+      - LAMBDA_NEXT__DATABASE__URL=postgres://postgres:postgres@db:5432/spore_db
+    command: ["./lambda_next"]
+
+  # Lambda Server - Testnet
+  lambda-testnet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lambda-testnet
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    volumes:
+      - ./config/testnet.toml:/app/config/default.toml
+    environment:
+      - LAMBDA_NEXT__DATABASE__URL=postgres://postgres:postgres@db:5432/spore_db
+    command: ["./lambda_next", "--config", "config/testnet.toml"]
+
+  # Spore API Server
+  spore-api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: spore-api-server
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/app/config
+    environment:
+      - LAMBDA_NEXT__DATABASE__URL=postgres://postgres:postgres@db:5432/spore_db
+
+volumes:
+  postgres_data: 

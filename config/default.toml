@@ -13,7 +13,7 @@ network_type = "mainnet"            # Network type: "mainnet", "testnet", or "de
 # Database configuration
 [database]
 enabled = true  # Set to true to enable database storage
-url = "postgres://postgres:postgres@localhost/spore_db"  # PostgreSQL connection string
+url = "postgres://postgres:postgres@db:5432/spore_db"  # PostgreSQL connection string for Docker
 max_connections = 5  # Maximum number of connections in the pool
 
 # DOB decoder configuration

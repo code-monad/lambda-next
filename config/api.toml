@@ -1,10 +1,9 @@
 # API server configuration
 [api]
-address = "0.0.0.0"  # Listen on all interfaces
-port = 8088          # Port to listen on
+address = "0.0.0.0"  # Bind to all interfaces in Docker
+port = 3000
 
-# Database connection - shares same config as main app
+# Database configuration
 [api.database]
-enabled = true
-url = "postgres://postgres:postgres@localhost/spore_db"
-max_connections = 5 
+url = "postgres://postgres:postgres@db:5432/spore_db"
+max_connections = 10 

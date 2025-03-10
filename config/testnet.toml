@@ -1,0 +1,34 @@
+[websocket]
+url = "wss://ckb-testnet-sub-ws.nervape.com"  # WebSocket URL for CKB node
+reconnect_interval = 5000    # milliseconds
+ping_interval = 30000        # milliseconds
+
+[ckb]
+type_script_code_hash = "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"  # Example code hash (Spore)
+type_script_hash_type = "data1"     # Can be "type" or "data1"
+query_limit = 300                   # Number of cells to fetch per query 
+query_interval_secs = 10            # Number of seconds to wait between queries
+network_type = "testnet"            # Network type: "mainnet", "testnet", or "devnet"
+
+# Database configuration
+[database]
+enabled = true  # Set to true to enable database storage
+url = "postgres://postgres:postgres@db:5432/spore_db"  # PostgreSQL connection string for Docker
+max_connections = 5  # Maximum number of connections in the pool
+
+# DOB decoder configuration
+[dob_decoder]
+enabled = true  # Set to true to enable DOB decoding
+url = "https://dev-api.nervape.com/decoder"  # DOB decoder JSON-RPC endpoint
+batch_size = 50  # Maximum number of spores to decode in a single batch request
+
+[[spore_filters]]
+name = "Generic Filter"      
+enabled = true                      
+filter_by_cluster = false            
+cluster_id = ""                      
+filter_by_type_ids = false
+type_ids = []                        # No inline Type IDs, all from JSON file
+type_ids_file = "" # JSON file with Type IDs from typeInfo.args
+skip_decoding = false
+exclude_cluster_ids = []             # List of cluster IDs to exclude for performance

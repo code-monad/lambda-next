@@ -18,7 +18,7 @@ mod network;
 mod routes;
 
 use network::NetworkType;
-use routes::{cluster, spore};
+use routes::{cluster, spore, address};
 
 /// Spore API server configuration
 #[derive(Debug, Deserialize)]
@@ -59,8 +59,6 @@ async fn main() -> Result<()> {
     // Load configuration
     let config_str = std::fs::read_to_string(&args.config)
         .map_err(|e| anyhow!("Failed to read config file: {}", e))?;
-
-    error!("Config: {}", config_str);
     
     let config = config::Config::builder()
         .add_source(config::File::from_str(&config_str, config::FileFormat::Toml))
@@ -91,6 +89,10 @@ async fn main() -> Result<()> {
         .route("/cluster/:cluster_id/all", get(cluster::get_all_by_cluster))
         // Spore routes
         .route("/spore/:id", get(spore::get_by_id))
+        // Address routes
+        .route("/address/:address/all", get(address::get_all_by_address))
+        .route("/address/:address/dob/all", get(address::get_all_dob_by_address))
+        .route("/address/:address/spore/all", get(address::get_all_spore_by_address))
         // Add state and middleware
         .with_state(state)
         .layer(TraceLayer::new_for_http())
