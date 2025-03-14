@@ -148,29 +148,21 @@ pub async fn post_all_by_address(
         None
     };
     
-    // Query the database with all content types
-    let all_spores = state.db
-        .get_spores_by_owner_filtered(
+    // Query the database with the cluster filter directly
+    let spores = state.db
+        .get_spores_by_owner_with_clusters(
             &address,
             500, // Higher limit since no pagination
             0,   // No offset
             None, // All content types
             true, // Include DOB output
             network_type,
+            &cluster_filter.0, // Pass cluster IDs for filtering at the database level
         )
         .await?;
     
-    // Filter spores by cluster IDs
-    let filtered_spores = if cluster_filter.0.is_empty() {
-        all_spores
-    } else {
-        all_spores.into_iter()
-            .filter(|spore| cluster_filter.0.contains(&spore.cluster_id))
-            .collect()
-    };
-    
     // Convert to enhanced spore data
-    let enhanced_spores = filtered_spores.into_iter()
+    let enhanced_spores = spores.into_iter()
         .map(EnhancedSporeData::from)
         .collect();
     
@@ -197,29 +189,21 @@ pub async fn post_all_dob_by_address(
         None
     };
     
-    // Query the database with DOB filter and include DOB output
-    let all_spores = state.db
-        .get_spores_by_owner_filtered(
+    // Query the database with the cluster filter directly
+    let spores = state.db
+        .get_spores_by_owner_with_clusters(
             &address,
             500, // Higher limit since no pagination
             0,   // No offset
-            Some("dob"),
+            Some("dob"), // Only DOB content types
             true, // Include DOB output
             network_type,
+            &cluster_filter.0, // Pass cluster IDs for filtering at the database level
         )
         .await?;
     
-    // Filter spores by cluster IDs
-    let filtered_spores = if cluster_filter.0.is_empty() {
-        all_spores
-    } else {
-        all_spores.into_iter()
-            .filter(|spore| cluster_filter.0.contains(&spore.cluster_id))
-            .collect()
-    };
-    
     // Convert to enhanced spore data
-    let enhanced_spores = filtered_spores.into_iter()
+    let enhanced_spores = spores.into_iter()
         .map(EnhancedSporeData::from)
         .collect();
     
@@ -246,29 +230,21 @@ pub async fn post_all_spore_by_address(
         None
     };
     
-    // Query the database, including all content types but excluding DOB output
-    let all_spores = state.db
-        .get_spores_by_owner_filtered(
+    // Query the database with the cluster filter directly
+    let spores = state.db
+        .get_spores_by_owner_with_clusters(
             &address,
             500, // Higher limit since no pagination
             0,   // No offset
             None, // All content types
             false, // Exclude DOB output
             network_type,
+            &cluster_filter.0, // Pass cluster IDs for filtering at the database level
         )
         .await?;
     
-    // Filter spores by cluster IDs
-    let filtered_spores = if cluster_filter.0.is_empty() {
-        all_spores
-    } else {
-        all_spores.into_iter()
-            .filter(|spore| cluster_filter.0.contains(&spore.cluster_id))
-            .collect()
-    };
-    
     // Convert to enhanced spore data
-    let enhanced_spores = filtered_spores.into_iter()
+    let enhanced_spores = spores.into_iter()
         .map(EnhancedSporeData::from)
         .collect();
     
