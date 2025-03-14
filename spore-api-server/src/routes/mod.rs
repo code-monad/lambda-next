@@ -17,6 +17,10 @@ pub struct QueryParams {
     pub network: Option<String>,
 }
 
+/// Request body for filtering by cluster IDs
+#[derive(Deserialize)]
+pub struct ClusterFilter(pub Vec<String>);
+
 /// API Error types
 #[derive(Error, Debug)]
 pub enum ApiError {

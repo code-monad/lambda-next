@@ -664,4 +664,197 @@ impl SporeDb {
         
         Ok(spores)
     }
+
+    /// Get spores by owner address with pagination, filtered by cluster IDs
+    pub async fn get_spores_by_owner_with_clusters(
+        &self, 
+        owner: &str, 
+        limit: i64, 
+        offset: i64,
+        content_type_filter: Option<&str>,
+        include_dob_output: bool,
+        network_type: Option<&str>,
+        cluster_ids: &[String]
+    ) -> Result<Vec<DbSporeData>, sqlx::Error> {
+        debug!("Getting spores with owner: {} (content filter: {}, dob output: {}, network: {}, cluster_ids: {:?})", 
+            owner, content_type_filter.unwrap_or("none"), include_dob_output, network_type.unwrap_or("none"), cluster_ids);
+        
+        // If no cluster IDs are provided, use the regular function
+        if cluster_ids.is_empty() {
+            return self.get_spores_by_owner_filtered(
+                owner, 
+                limit, 
+                offset, 
+                content_type_filter, 
+                include_dob_output, 
+                network_type
+            ).await;
+        }
+        
+        // Build the SQL query based on filters
+        let mut query_str = String::from(
+            r#"
+            SELECT id, cluster_id, content_type, content, tx_hash, index, owner, capacity, 
+                CASE WHEN $4 THEN render_output ELSE NULL END as render_output, 
+                CASE WHEN $4 THEN dob_content ELSE NULL END as dob_content,
+                network_type
+            FROM spores
+            WHERE owner = $1
+            "#
+        );
+        
+        // Add content type filter if needed
+        if let Some(_) = content_type_filter {
+            query_str.push_str(" AND content_type LIKE $5 || '%'");
+        }
+        
+        // Add network type filter if needed
+        if let Some(_) = network_type {
+            if content_type_filter.is_some() {
+                query_str.push_str(" AND network_type = $6");
+            } else {
+                query_str.push_str(" AND network_type = $5");
+            }
+        }
+        
+        // Add the cluster_ids filter
+        query_str.push_str(" AND cluster_id = ANY($7)");
+        
+        // Add order, limit and offset
+        query_str.push_str(" ORDER BY id LIMIT $2 OFFSET $3");
+        
+        // Prepare the query with bindings
+        let mut query = sqlx::query_as(&query_str)
+            .bind(owner)
+            .bind(limit)
+            .bind(offset)
+            .bind(include_dob_output);
+        
+        // Add content type filter if present
+        if let Some(content_filter) = content_type_filter {
+            query = query.bind(content_filter);
+            
+            // Add network type if present
+            if let Some(network) = network_type {
+                query = query.bind(network);
+            }
+        } else if let Some(network) = network_type {
+            // Just add network if content filter not present
+            query = query.bind(network);
+        }
+        
+        // Add the cluster_ids as an array parameter
+        query = query.bind(cluster_ids);
+        
+        let rows: Vec<(String, String, String, String, String, i32, String, String, Option<String>, Option<serde_json::Value>, Option<String>)> = 
+            query.fetch_all(&self.pool).await?;
+        
+        Ok(rows.into_iter().map(|(id, cluster_id, content_type, content, tx_hash, index, owner, capacity, render_output, dob_content, network_type)| {
+            let dob_decode_output = match (render_output, dob_content) {
+                (Some(render), Some(content)) => Some(ServerDecodeResult {
+                    render_output: render,
+                    dob_content: content,
+                }),
+                _ => None,
+            };
+            
+            DbSporeData {
+                id,
+                cluster_id,
+                content_type,
+                content,
+                tx_hash,
+                index: index as u32,
+                owner,
+                capacity,
+                dob_decode_output,
+                network_type,
+            }
+        }).collect())
+    }
+    
+    /// Get a spore by ID, checking if it belongs to the provided cluster IDs
+    pub async fn get_spore_by_id_with_clusters(
+        &self, 
+        id: &str, 
+        network_type: Option<&str>,
+        cluster_ids: &[String]
+    ) -> Result<Vec<DbSporeData>, sqlx::Error> {
+        debug!("Getting spore by ID: {} with network: {:?} and cluster_ids: {:?}", id, network_type, cluster_ids);
+        
+        // If no cluster IDs are provided, use the regular function
+        if cluster_ids.is_empty() {
+            return self.get_spore_by_id_with_network(id, network_type).await;
+        }
+        
+        let query_str = if let Some(_) = network_type {
+            // Query with network filter and cluster filter
+            r#"
+            SELECT 
+                s.id, s.cluster_id, s.content_type, s.content, s.tx_hash, s.index, 
+                s.owner, s.capacity, s.network_type,
+                (CASE 
+                    WHEN s.render_output IS NOT NULL AND s.dob_content IS NOT NULL THEN 
+                        jsonb_build_object('render_output', s.render_output, 'dob_content', s.dob_content) 
+                    ELSE NULL 
+                END) as dob_decode_output
+            FROM spores s
+            WHERE s.id = $1 AND s.network_type = $2 AND s.cluster_id = ANY($3)
+            "#
+        } else {
+            // Query with just cluster filter
+            r#"
+            SELECT 
+                s.id, s.cluster_id, s.content_type, s.content, s.tx_hash, s.index, 
+                s.owner, s.capacity, s.network_type,
+                (CASE 
+                    WHEN s.render_output IS NOT NULL AND s.dob_content IS NOT NULL THEN 
+                        jsonb_build_object('render_output', s.render_output, 'dob_content', s.dob_content) 
+                    ELSE NULL 
+                END) as dob_decode_output
+            FROM spores s
+            WHERE s.id = $1 AND s.cluster_id = ANY($2)
+            "#
+        };
+        
+        let query = if let Some(network) = network_type {
+            sqlx::query(query_str)
+                .bind(id)
+                .bind(network)
+                .bind(cluster_ids)
+        } else {
+            sqlx::query(query_str)
+                .bind(id)
+                .bind(cluster_ids)
+        };
+        
+        let spores = query
+            .map(|row: sqlx::postgres::PgRow| {
+                let dob_decode_output: Option<serde_json::Value> = row.get("dob_decode_output");
+                
+                // Parse the JSON value into ServerDecodeResult if present
+                let dob_output = dob_decode_output.and_then(|json| {
+                    serde_json::from_value::<ServerDecodeResult>(json).ok()
+                });
+                
+                DbSporeData {
+                    id: row.get("id"),
+                    cluster_id: row.get("cluster_id"),
+                    content_type: row.get("content_type"),
+                    content: row.get("content"),
+                    tx_hash: row.get("tx_hash"),
+                    index: row.get::<i32, _>("index") as u32,
+                    owner: row.get("owner"),
+                    capacity: row.get("capacity"),
+                    dob_decode_output: dob_output,
+                    network_type: row.get("network_type"),
+                }
+            })
+            .fetch_all(&self.pool)
+            .await?;
+        
+        trace!("Found {} spores for ID: {}", spores.len(), id);
+        
+        Ok(spores)
+    }
 } 
