@@ -92,11 +92,21 @@ async fn main() -> Result<()> {
         // Address routes - GET
         .route("/address/:address/all", get(address::get_all_by_address))
         .route("/address/:address/dob/all", get(address::get_all_dob_by_address))
+        .route("/address/:address/spore/all", get(address::get_all_spore_by_address))
         .route("/address/:address/spores/all", get(address::get_all_spore_by_address))
+        // name aliases
+        .route("/address/:address/dob", get(address::get_all_dob_by_address))
+        .route("/address/:address/spore", get(address::get_all_spore_by_address))
+        .route("/address/:address/spores", get(address::get_all_spore_by_address))
         // Address routes - POST
         .route("/address/:address/all", post(address::post_all_by_address))
         .route("/address/:address/dob/all", post(address::post_all_dob_by_address))
+        .route("/address/:address/spore/all", post(address::post_all_spore_by_address))
         .route("/address/:address/spores/all", post(address::post_all_spore_by_address))
+        // name aliases
+        .route("/address/:address/dob", post(address::post_all_dob_by_address))
+        .route("/address/:address/spore", post(address::post_all_spore_by_address))
+        .route("/address/:address/spores", post(address::post_all_spore_by_address))
         // Add state and middleware
         .with_state(state)
         .layer(TraceLayer::new_for_http())
