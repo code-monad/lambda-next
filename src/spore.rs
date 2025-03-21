@@ -509,8 +509,17 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
 
             let index = cell.raw_cell.get("out_point")
                 .and_then(|out_point| out_point.get("index"))
-                .and_then(|index| index.as_u64())
-                .unwrap_or(0) as u32;
+                .and_then(|index| index.as_str())
+                .and_then(|index_str| {
+                    // Handle hex string format (0x prefix)
+                    if index_str.starts_with("0x") {
+                        u32::from_str_radix(&index_str[2..], 16).ok()
+                    } else {
+                        // Fallback to parsing as decimal
+                        index_str.parse::<u32>().ok()
+                    }
+                })
+                .unwrap_or(0);
             
             // Situation #1: DOB spore with full data already
             if spore_data.content_type.starts_with("dob/") {
@@ -758,8 +767,17 @@ impl SporeCell {
         
         let index = self.raw_cell.get("out_point")
             .and_then(|out_point| out_point.get("index"))
-            .and_then(|index| index.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|index| index.as_str())
+            .and_then(|index_str| {
+                // Handle hex string format (0x prefix)
+                if index_str.starts_with("0x") {
+                    u32::from_str_radix(&index_str[2..], 16).ok()
+                } else {
+                    // Fallback to parsing as decimal
+                    index_str.parse::<u32>().ok()
+                }
+            })
+            .unwrap_or(0);
         
         // Extract capacity
         let capacity = self.raw_cell.get("output")
