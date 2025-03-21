@@ -302,19 +302,21 @@ impl SporeDb {
 
     /// Update only owner and capacity fields for a spore
     /// This is an optimization for spores that are already fully populated
-    pub async fn update_spore_owner_capacity(&self, id: &str, owner: &str, capacity: &str) -> Result<(), sqlx::Error> {
+    pub async fn update_spore_owner_capacity(&self, id: &str, owner: &str, capacity: &str, tx_hash: &str, index: u32) -> Result<(), sqlx::Error> {
         debug!("Partial update (owner/capacity) for spore ID: {}", id);
         
         sqlx::query(
             r#"
             UPDATE spores 
-            SET owner = $2, capacity = $3
+            SET owner = $2, capacity = $3, tx_hash = $4, index = $5
             WHERE id = $1
             "#,
         )
         .bind(id)
         .bind(owner)
         .bind(capacity)
+        .bind(tx_hash)
+        .bind(index as i32)
         .execute(&self.pool)
         .await?;
         

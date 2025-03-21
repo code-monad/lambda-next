@@ -500,6 +500,17 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                 .and_then(|output| output.get("capacity"))
                 .and_then(|capacity| capacity.as_str())
                 .unwrap_or("0").to_string();
+
+            // extract tx hash and index for partial update
+            let tx_hash = cell.raw_cell.get("out_point")
+                .and_then(|out_point| out_point.get("tx_hash"))
+                .and_then(|tx_hash| tx_hash.as_str())
+                .unwrap_or("unknown").to_string();
+
+            let index = cell.raw_cell.get("out_point")
+                .and_then(|out_point| out_point.get("index"))
+                .and_then(|index| index.as_u64())
+                .unwrap_or(0) as u32;
             
             // Situation #1: DOB spore with full data already
             if spore_data.content_type.starts_with("dob/") {
@@ -508,7 +519,7 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                     Ok(true) => {
                         // DOB spore is fully populated - do only partial update
                         debug!("DOB spore is fully populated - performing partial update for: {}", type_id);
-                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity).await {
+                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity, &tx_hash, index).await {
                             error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
                         }
                         return Ok(());
@@ -530,7 +541,7 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                     Ok(Some(_)) => {
                         // Generic spore exists - do only partial update
                         debug!("Generic spore exists - performing partial update for: {}", type_id);
-                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity).await {
+                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity, &tx_hash, index).await {
                             error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
                         }
                         return Ok(());
