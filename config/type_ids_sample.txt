@@ -1,0 +1,48 @@
+# ==========================================================
+# SAMPLE TYPE IDs FILE
+# ==========================================================
+# This file contains a list of Type IDs to filter Spore cells
+# 
+# FORMAT:
+# - One Type ID per line (64 hex characters with 0x prefix)
+# - Lines starting with # are treated as comments
+# - Empty lines are ignored for readability
+# - No spaces or special characters in Type IDs
+# ==========================================================
+
+# Active collection Type IDs
+# --------------------------
+0x123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0
+0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+
+# Seasonal collections (Spring 2023)
+# ---------------------------------
+0x111111111111111111111111111111111111111111111111111111111111111a
+0x222222222222222222222222222222222222222222222222222222222222222b
+
+# Exclusive collection Type IDs
+# ----------------------------
+0x333333333333333333333333333333333333333333333333333333333333333c
+0x444444444444444444444444444444444444444444444444444444444444444d
+
+# ==========================================================
+# INACTIVE TYPE IDs (commented out)
+# ==========================================================
+# Uncomment lines below to include these Type IDs in filtering
+# Example of how to enable/disable specific Type IDs without
+# removing them from the file
+
+# Legacy collection (deactivated)
+# ------------------------------
+# 0x555555555555555555555555555555555555555555555555555555555555555e
+# 0x666666666666666666666666666666666666666666666666666666666666666f
+
+# Test collection (development only)
+# --------------------------------
+# 0x777777777777777777777777777777777777777777777777777777777777777g
+# 0x888888888888888888888888888888888888888888888888888888888888888h
+# 0x999999999999999999999999999999999999999999999999999999999999999i
+
+# ==========================================================
+# End of file
+# ========================================================== 

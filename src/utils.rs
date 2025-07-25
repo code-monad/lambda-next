@@ -1,48 +1,12 @@
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tracing::{debug, error, instrument};
 
 use crate::ckb::CkbError;
-
-#[derive(Debug)]
-pub enum AppError {
-    WebSocketError(tokio_tungstenite::tungstenite::Error),
-    ConfigError(Box<dyn Error + Send + Sync>),
-    UrlParseError(url::ParseError),
-    InvalidScheme(String),
-    CkbError(CkbError),
-    MessageHandlingError(String),
-    SporeError(String),
-}
-
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::WebSocketError(e) => write!(f, "WebSocket error: {}", e),
-            AppError::ConfigError(e) => write!(f, "Configuration error: {}", e),
-            AppError::UrlParseError(e) => write!(f, "URL parse error: {}", e),
-            AppError::InvalidScheme(s) => write!(f, "Invalid URL scheme: {}", s),
-            AppError::CkbError(e) => write!(f, "CKB error: {}", e),
-            AppError::MessageHandlingError(e) => write!(f, "Message handling error: {}", e),
-            AppError::SporeError(e) => write!(f, "Spore error: {}", e),
-        }
-    }
-}
-
-impl Error for AppError {}
-
-impl From<CkbError> for AppError {
-    fn from(error: CkbError) -> Self {
-        AppError::CkbError(error)
-    }
-}
-
-pub type Result<T> = std::result::Result<T, AppError>;
 
 // Shared state for responses
 pub struct SharedState {
@@ -85,10 +49,10 @@ pub async fn wait_for_response(request_id: u64, state: Arc<Mutex<SharedState>>) 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let timeout_error = AppError::MessageHandlingError(format!(
+    let timeout_error = anyhow!(
         "Timeout waiting for response to request ID: {}",
         request_id
-    ));
+    );
     error!(
         "Response timeout after {} ms: {}",
         timeout.as_millis(),

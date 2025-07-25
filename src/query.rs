@@ -1,13 +1,17 @@
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::{Duration, Instant};
+use tokio::sync::{Mutex, broadcast};
+use tokio::time::{self, Duration, Instant};
 use tracing::{debug, error, info, instrument, trace, warn};
+use anyhow::Result;
+use ckb_jsonrpc_types::Script;
+use ckb_types::H256;
+use hex;
 
 use crate::ckb::CkbClient;
 use crate::config::Config;
-use crate::spore::process_cells_with_filters;
-use crate::utils::{Result, SharedState, wait_for_response};
+use crate::spore::{self, process_cells_with_filters};
+use crate::utils::{SharedState, wait_for_response};
 use crate::db::SporeDb;
 
 /// Query for cells using WebSocket with proper request tracking and paging
@@ -78,7 +82,7 @@ pub async fn query_cells_ws(
             // Apply filters and process cells with database connection
             let db_ref = db.as_ref();
             process_cells_with_filters(cells.as_slice(), &config.spore_filters, &config.ckb, db_ref).await
-                .map_err(|e| crate::utils::AppError::SporeError(e.to_string()))?;
+                .map_err(|e| anyhow::anyhow!("Spore error: {}", e))?;
         }
 
         // Check if we have more pages
@@ -97,5 +101,42 @@ pub async fn query_cells_ws(
         "Query operation completed"
     );
 
+    Ok(())
+}
+
+#[instrument(skip_all)]
+pub async fn run_query_loop(
+    state: Arc<Mutex<SharedState>>,
+    ckb_client: CkbClient,
+    config: &Config,
+    db: Option<Arc<SporeDb>>,
+    shutdown_receiver: &mut broadcast::Receiver<()>,
+) -> Result<()> {
+    let mut interval = time::interval(Duration::from_secs(config.ckb.query_interval_secs));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let filters = &config.spore_filters;
+                for filter in filters {
+                    if !filter.enabled {
+                        continue;
+                    }
+                    info!("Running query for filter: {}", filter.name);
+                    let script = Script::new(
+                        H256::from_slice(&hex::decode(config.ckb.type_script_code_hash.trim_start_matches("0x")).unwrap()).unwrap(),
+                        config.ckb.type_script_hash_type.as_str().into(),
+                        None,
+                    );
+                    let cells = ckb_client.get_cells_by_type_script(&script, config.ckb.query_limit).await?;
+                    let processed_cells = spore::apply_filter(cells, filter, config.ckb.network_type.clone().into());
+                    spore::process_spore_cells(processed_cells, db.as_deref()).await?;
+                }
+            }
+            _ = shutdown_receiver.recv() => {
+                warn!("Query loop received shutdown signal, terminating.");
+                break;
+            }
+        }
+    }
     Ok(())
 }

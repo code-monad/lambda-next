@@ -1,5 +1,5 @@
+use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::error::Error;
 use ckb_sdk::NetworkType;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -66,13 +66,15 @@ pub struct DatabaseConfig {
 }
 
 impl Config {
-    pub fn load() -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub fn load() -> Result<Self> {
         let config_builder = config::Config::builder()
             .add_source(config::File::with_name("config/default.toml"))
             .add_source(config::File::with_name("config/local.toml").required(false))
             .add_source(config::Environment::with_prefix("LAMBDA_NEXT").separator("__"));
 
-        let config = config_builder.build()?;
-        Ok(config.try_deserialize()?)
+        let settings = config_builder.build().context("Failed to build config")?;
+        settings
+            .try_deserialize()
+            .context("Failed to deserialize config")
     }
 }
