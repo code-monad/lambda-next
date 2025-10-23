@@ -2,7 +2,7 @@ use futures::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, sleep, timeout};
+use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, instrument, warn};
 use url::Url;

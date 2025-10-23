@@ -3,12 +3,12 @@ use axum::{
     Json,
 };
 use lambda_next::db::{DbSporeData, ServerDecodeResult};
-use tracing::{debug, warn};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use serde_json::Value;
-use serde::{Serialize, Serializer, ser::SerializeStruct};
+use tracing::{debug, warn};
 
 use crate::{
-    network::NetworkType, 
+    network::NetworkType,
     routes::{ApiError, QueryParams},
     AppState,
 };
@@ -20,25 +20,35 @@ pub struct EnhancedSporeData {
     parsed_json: Option<Value>,
 }
 
-impl From<DbSporeData> for EnhancedSporeData {
-    fn from(spore: DbSporeData) -> Self {
-        // If there's DOB output, try to parse the render_output as JSON
-        let parsed_json = if let Some(ref dob_output) = spore.dob_decode_output {
-            match serde_json::from_str::<Value>(&dob_output.render_output) {
-                Ok(json) => Some(json),
-                Err(e) => {
-                    warn!("Failed to parse render_output as JSON: {}", e);
-                    None
+impl EnhancedSporeData {
+    pub fn new(spore: DbSporeData, decode_dobs: bool) -> Self {
+        // If there's DOB output and decoding is enabled, try to parse the render_output as JSON
+        let parsed_json = if decode_dobs {
+            if let Some(ref dob_output) = spore.dob_decode_output {
+                match serde_json::from_str::<Value>(&dob_output.render_output) {
+                    Ok(json) => Some(json),
+                    Err(e) => {
+                        warn!("Failed to parse render_output as JSON: {}", e);
+                        None
+                    }
                 }
+            } else {
+                None
             }
         } else {
             None
         };
-        
+
         Self {
             data: spore,
             parsed_json,
         }
+    }
+}
+
+impl From<DbSporeData> for EnhancedSporeData {
+    fn from(spore: DbSporeData) -> Self {
+        Self::new(spore, true)
     }
 }
 
@@ -50,7 +60,7 @@ impl Serialize for EnhancedSporeData {
     {
         // Create a base structure with all fields from the original data
         let mut state = serializer.serialize_struct("EnhancedSporeData", 10)?;
-        
+
         // Serialize all base fields
         state.serialize_field("id", &self.data.id)?;
         state.serialize_field("cluster_id", &self.data.cluster_id)?;
@@ -61,7 +71,7 @@ impl Serialize for EnhancedSporeData {
         state.serialize_field("owner", &self.data.owner)?;
         state.serialize_field("capacity", &self.data.capacity)?;
         state.serialize_field("network_type", &self.data.network_type)?;
-        
+
         // If dob_decode_output exists, create a modified version with JSON render_output
         if let Some(ref dob_output) = self.data.dob_decode_output {
             let modified_dob = CustomDobOutput {
@@ -73,7 +83,7 @@ impl Serialize for EnhancedSporeData {
             };
             state.serialize_field("dob_decode_output", &modified_dob)?;
         }
-        
+
         state.end()
     }
 }
@@ -92,7 +102,7 @@ pub async fn get_all_by_cluster(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<EnhancedSporeData>>, ApiError> {
     debug!("Getting spores for cluster: {}", cluster_id);
-    
+
     // Parse network type if provided
     let network_type = if let Some(network) = &params.network {
         match NetworkType::parse(network) {
@@ -102,22 +112,22 @@ pub async fn get_all_by_cluster(
     } else {
         None
     };
-    
-    // Query the database - using a high limit value since pagination is removed
-    let spores = state.db
-        .get_spores_by_cluster_with_network(
-            &cluster_id,
-            500, // Higher limit since no pagination
-            0,   // No offset
-            network_type,
-        )
+
+    let limit = params.limit.filter(|value| *value > 0);
+    let offset = params.offset.unwrap_or(0).max(0);
+    let decode_dobs = params.decode_dobs.unwrap_or(true);
+
+    let spores = state
+        .db
+        .get_spores_by_cluster_with_network(&cluster_id, limit, offset, network_type)
         .await?;
-    
+
     // Convert DbSporeData to EnhancedSporeData
-    let enhanced_spores = spores.into_iter()
-        .map(EnhancedSporeData::from)
+    let enhanced_spores = spores
+        .into_iter()
+        .map(|spore| EnhancedSporeData::new(spore, decode_dobs))
         .collect();
-    
+
     // Return the results as a direct array
     Ok(Json(enhanced_spores))
-} 
+}

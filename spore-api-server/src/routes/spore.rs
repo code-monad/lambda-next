@@ -6,9 +6,9 @@ use lambda_next::db::DbSporeData;
 use tracing::debug;
 
 use crate::{
-    network::NetworkType, 
-    routes::{ApiError, QueryParams},
+    network::NetworkType,
     routes::cluster::EnhancedSporeData,
+    routes::{ApiError, QueryParams},
     AppState,
 };
 
@@ -19,7 +19,7 @@ pub async fn get_by_id(
     State(state): State<AppState>,
 ) -> Result<Json<EnhancedSporeData>, ApiError> {
     debug!("Getting spore: {}", id);
-    
+
     // Parse network type if provided
     let network_type = if let Some(network) = &params.network {
         match NetworkType::parse(network) {
@@ -29,22 +29,22 @@ pub async fn get_by_id(
     } else {
         None
     };
-    
+
     // Query the database
-    let spores = state.db
-        .get_spore_by_id_with_network(
-            &id,
-            network_type,
-        )
+    let spores = state
+        .db
+        .get_spore_by_id_with_network(&id, network_type)
         .await?;
-    
+
     // Check if any spore was found
-    let spore = spores.into_iter().next()
+    let spore = spores
+        .into_iter()
+        .next()
         .ok_or_else(|| ApiError::NotFound(format!("Spore with ID '{}' not found", id)))?;
-    
+
     // Convert to enhanced spore data with parsed render_output
     let enhanced_spore = EnhancedSporeData::from(spore);
-    
+
     // Return the spore directly
     Ok(Json(enhanced_spore))
-} 
+}

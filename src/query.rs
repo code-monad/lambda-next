@@ -6,9 +6,9 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::ckb::CkbClient;
 use crate::config::Config;
-use crate::spore::process_cells_with_filters;
-use crate::utils::{Result, SharedState, wait_for_response};
 use crate::db::SporeDb;
+use crate::spore::process_cells_with_filters;
+use crate::utils::{wait_for_response, Result, SharedState};
 
 /// Query for cells using WebSocket with proper request tracking and paging
 #[instrument(skip(client, state, config, db), fields(code_hash = %type_script_code_hash, hash_type = %hash_type, limit = %limit))]
@@ -46,7 +46,7 @@ pub async fn query_cells_ws(
                 cursor.as_deref(),
             )
             .await?;
-            
+
         // Extract the request ID from the response
         let request_id = response
             .get("id")
@@ -74,11 +74,17 @@ pub async fn query_cells_ws(
         // Process the cells
         if !cells.is_empty() {
             debug!("Processing {} cells", cells.len());
-            
+
             // Apply filters and process cells with database connection
             let db_ref = db.as_ref();
-            process_cells_with_filters(cells.as_slice(), &config.spore_filters, &config.ckb, db_ref).await
-                .map_err(|e| crate::utils::AppError::SporeError(e.to_string()))?;
+            process_cells_with_filters(
+                cells.as_slice(),
+                &config.spore_filters,
+                &config.ckb,
+                db_ref,
+            )
+            .await
+            .map_err(|e| crate::utils::AppError::SporeError(e.to_string()))?;
         }
 
         // Check if we have more pages

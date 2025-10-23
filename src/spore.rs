@@ -1,32 +1,23 @@
+use anyhow::{anyhow, Result};
+use lazy_static::lazy_static;
 use molecule::prelude::*;
 use serde_json::Value;
-use spore_types::{NativeNFTData, generated::spore::SporeData};
+use spore_types::{generated::spore::SporeData, NativeNFTData};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
-use tracing::{debug, error, info, trace, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use lazy_static::lazy_static;
-use anyhow::{anyhow, Result};
+use std::sync::{Arc, Mutex as StdMutex};
+use tracing::{debug, error, info, trace, warn};
 
 // Add imports for CKB address handling
 use ckb_jsonrpc_types::Script;
-use ckb_types::{
-    core::ScriptHashType,
-    packed,
-    prelude::*,
-    H256,
-};
-use ckb_sdk::{
-    Address,
-    AddressPayload,
-    NetworkType,
-};
+use ckb_sdk::{Address, AddressPayload, NetworkType};
+use ckb_types::{core::ScriptHashType, packed, prelude::*, H256};
 
-use crate::config::{SporeFilterConfig, CkbConfig};
-use std::str::FromStr;
+use crate::config::{CkbConfig, SporeFilterConfig};
 use crate::db::{DbSporeData, ServerDecodeResult};
+use std::str::FromStr;
 
 /// Represents a Spore cell with its decoded data
 #[derive(Debug, Clone)]
@@ -85,7 +76,8 @@ lazy_static! {
 
 // Global cache for Type IDs loaded from files
 lazy_static! {
-    static ref TYPE_ID_FILE_CACHE: StdMutex<HashMap<String, Vec<String>>> = StdMutex::new(HashMap::new());
+    static ref TYPE_ID_FILE_CACHE: StdMutex<HashMap<String, Vec<String>>> =
+        StdMutex::new(HashMap::new());
 }
 
 /// Extract the Type ID from a cell
@@ -108,8 +100,8 @@ fn extract_type_id(cell: &Value) -> Option<String> {
 /// Decodes the molecule-encoded SporeData from a cell, using cache when available
 pub fn decode_spore_data(cell: &Value) -> Result<NativeNFTData> {
     // Extract Type ID for cache lookup
-    let type_id = extract_type_id(cell)
-        .ok_or_else(|| anyhow!("Cell has no Type ID for cache lookup"))?;
+    let type_id =
+        extract_type_id(cell).ok_or_else(|| anyhow!("Cell has no Type ID for cache lookup"))?;
 
     // Try to get from cache first
     let cache = SPORE_CACHE.lock().unwrap();
@@ -173,21 +165,27 @@ pub fn extract_cluster_id(spore_data: &NativeNFTData) -> Option<String> {
 /// Loads Type IDs from a file, supporting two formats:
 /// 1. Plain text format: One Type ID per line, lines starting with # are comments
 /// 2. JSON array format: Objects with typeInfo.args containing Type IDs
-fn load_type_ids_from_file(file_path: &str) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+fn load_type_ids_from_file(
+    file_path: &str,
+) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
     // Check if we already have this file in cache
     {
         let cache = TYPE_ID_FILE_CACHE.lock().unwrap();
         if let Some(type_ids) = cache.get(file_path) {
-            info!("Using cached Type IDs for file '{}' ({} entries)", file_path, type_ids.len());
+            info!(
+                "Using cached Type IDs for file '{}' ({} entries)",
+                file_path,
+                type_ids.len()
+            );
             return Ok(type_ids.clone());
         }
     }
-    
+
     // Not in cache, load from file
     info!("Loading Type IDs from file '{}' (first time)", file_path);
     let path = Path::new(file_path);
     let file = File::open(path)?;
-    
+
     let type_ids = if file_path.to_lowercase().ends_with(".json") {
         info!("Detected JSON format for Type IDs file: {}", file_path);
         load_type_ids_from_json(file)?
@@ -195,44 +193,52 @@ fn load_type_ids_from_file(file_path: &str) -> std::result::Result<Vec<String>, 
         // Use the existing plain text format parser
         load_type_ids_from_text(file)?
     };
-    
+
     // Add to cache for future use
     {
         let mut cache = TYPE_ID_FILE_CACHE.lock().unwrap();
         cache.insert(file_path.to_string(), type_ids.clone());
-        info!("Cached {} Type IDs from file '{}'", type_ids.len(), file_path);
+        info!(
+            "Cached {} Type IDs from file '{}'",
+            type_ids.len(),
+            file_path
+        );
     }
-    
+
     Ok(type_ids)
 }
 
 /// Loads Type IDs from a plain text file (one per line, # for comments)
-fn load_type_ids_from_text(file: File) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+fn load_type_ids_from_text(
+    file: File,
+) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
     let reader = BufReader::new(file);
     let mut type_ids = Vec::new();
-    
+
     for line in reader.lines() {
         let line = line?;
         let trimmed = line.trim();
-        
+
         // Skip empty lines and comments
         if !trimmed.is_empty() && !trimmed.starts_with('#') {
             type_ids.push(trimmed.to_string());
         }
     }
-    
+
     Ok(type_ids)
 }
 
 /// Loads Type IDs from a JSON file
 /// Expects either an array of Type IDs as strings, or
 /// an array of objects with typeInfo.args containing the Type IDs
-fn load_type_ids_from_json(file: File) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+fn load_type_ids_from_json(
+    file: File,
+) -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
     let reader = BufReader::new(file);
     let json: Value = serde_json::from_reader(reader)?;
-    
+
     let mut type_ids = Vec::new();
-    
+
     // Check if it's a JSON array
     if let Some(array) = json.as_array() {
         for item in array {
@@ -246,7 +252,7 @@ fn load_type_ids_from_json(file: File) -> std::result::Result<Vec<String>, Box<d
     } else {
         return Err("Invalid JSON format: expected array of objects with typeInfo.args".into());
     }
-    
+
     info!("Loaded {} Type IDs from JSON file", type_ids.len());
     Ok(type_ids)
 }
@@ -260,9 +266,7 @@ fn extract_type_id_from_json(item: &Value) -> Option<String> {
     if let Some(type_id) = item.as_str() {
         return Some(type_id.to_string());
     }
-    
-    
-    
+
     // Case 2: Look for sporeId directly
     if let Some(spore_id) = item.get("sporeId") {
         if let Some(type_id) = spore_id.as_str() {
@@ -278,12 +282,16 @@ fn extract_type_id_from_json(item: &Value) -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
 /// Filter cells based on configured criteria
-pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type: NetworkType) -> Vec<SporeCell> {
+pub fn apply_filter(
+    cells: Vec<Value>,
+    filter: &SporeFilterConfig,
+    network_type: NetworkType,
+) -> Vec<SporeCell> {
     let cells_len = cells.len();
     debug!("Applying filter '{}' to {} cells", filter.name, cells_len);
 
@@ -296,7 +304,11 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
         if !file_path.is_empty() {
             match load_type_ids_from_file(file_path) {
                 Ok(file_type_ids) => {
-                    debug!("Adding {} Type IDs from file '{}'", file_type_ids.len(), file_path);
+                    debug!(
+                        "Adding {} Type IDs from file '{}'",
+                        file_type_ids.len(),
+                        file_path
+                    );
                     type_ids.extend(file_type_ids);
                 }
                 Err(e) => {
@@ -314,7 +326,7 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
     };
 
     // Create a set for excluded cluster IDs for faster lookup
-    let exclude_cluster_id_set: std::collections::HashSet<String> = 
+    let exclude_cluster_id_set: std::collections::HashSet<String> =
         filter.exclude_cluster_ids.iter().cloned().collect();
 
     let cluster_id_filter = if filter.filter_by_cluster {
@@ -365,8 +377,13 @@ pub fn apply_filter(cells: Vec<Value>, filter: &SporeFilterConfig, network_type:
 
         // Check if this cell's cluster ID is in the exclude list
         if let Some(cell_cluster_id) = &cluster_id {
-            if !exclude_cluster_id_set.is_empty() && exclude_cluster_id_set.contains(cell_cluster_id) {
-                trace!("Skipping cell with excluded cluster ID: {}", cell_cluster_id);
+            if !exclude_cluster_id_set.is_empty()
+                && exclude_cluster_id_set.contains(cell_cluster_id)
+            {
+                trace!(
+                    "Skipping cell with excluded cluster ID: {}",
+                    cell_cluster_id
+                );
                 continue;
             }
         }
@@ -470,8 +487,14 @@ pub async fn process_cells_with_filters(
 ///
 /// This function is a placeholder that should be customized based on specific requirements.
 /// The user should implement this function to perform their desired operations on each spore cell.
-pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::SporeDb>>) -> Result<()> {
-    debug!("Processing spore cell: {}", cell.type_id.as_deref().unwrap_or("None"));
+pub async fn process_single_spore(
+    cell: &SporeCell,
+    db: Option<&Arc<crate::db::SporeDb>>,
+) -> Result<()> {
+    debug!(
+        "Processing spore cell: {}",
+        cell.type_id.as_deref().unwrap_or("None")
+    );
     trace!("Spore data: {:?}", cell.spore_data);
     trace!("Cluster ID: {:?}", cell.cluster_id);
     trace!("Type ID: {:?}", cell.type_id);
@@ -483,7 +506,8 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
         // Standard processing for cells with spore_data
         if let Some(spore_data) = &cell.spore_data {
             // Extract required fields for partial update
-            let owner = if let Some(lock) = cell.raw_cell.get("output").and_then(|o| o.get("lock")) {
+            let owner = if let Some(lock) = cell.raw_cell.get("output").and_then(|o| o.get("lock"))
+            {
                 if let Some(owner) = SporeCell::extract_owner_from_lock(lock, cell.network_type) {
                     owner
                 } else {
@@ -494,20 +518,28 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                 // If lock script is missing, fall back to regular processing
                 return process_regular_spore(cell, Some(db)).await;
             };
-            
+
             // Extract capacity for partial update
-            let capacity = cell.raw_cell.get("output")
+            let capacity = cell
+                .raw_cell
+                .get("output")
                 .and_then(|output| output.get("capacity"))
                 .and_then(|capacity| capacity.as_str())
-                .unwrap_or("0").to_string();
+                .unwrap_or("0")
+                .to_string();
 
             // extract tx hash and index for partial update
-            let tx_hash = cell.raw_cell.get("out_point")
+            let tx_hash = cell
+                .raw_cell
+                .get("out_point")
                 .and_then(|out_point| out_point.get("tx_hash"))
                 .and_then(|tx_hash| tx_hash.as_str())
-                .unwrap_or("unknown").to_string();
+                .unwrap_or("unknown")
+                .to_string();
 
-            let index = cell.raw_cell.get("out_point")
+            let index = cell
+                .raw_cell
+                .get("out_point")
                 .and_then(|out_point| out_point.get("index"))
                 .and_then(|index| index.as_str())
                 .and_then(|index_str| {
@@ -520,23 +552,34 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                     }
                 })
                 .unwrap_or(0);
-            
+
             // Situation #1: DOB spore with full data already
             if spore_data.content_type.starts_with("dob/") {
                 // Check if this DOB spore is already fully populated
                 match db.is_dob_spore_fully_populated(type_id).await {
                     Ok(true) => {
                         // DOB spore is fully populated - do only partial update
-                        debug!("DOB spore is fully populated - performing partial update for: {}", type_id);
-                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity, &tx_hash, index).await {
-                            error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
+                        debug!(
+                            "DOB spore is fully populated - performing partial update for: {}",
+                            type_id
+                        );
+                        if let Err(e) = db
+                            .update_spore_owner_capacity(
+                                type_id, &owner, &capacity, &tx_hash, index,
+                            )
+                            .await
+                        {
+                            error!(
+                                "Failed to update owner/capacity for spore {}: {}",
+                                type_id, e
+                            );
                         }
                         return Ok(());
-                    },
+                    }
                     Ok(false) => {
                         // DOB spore exists but missing some data - proceed with full update
                         debug!("DOB spore needs full update: {}", type_id);
-                    },
+                    }
                     Err(e) => {
                         // Error checking DOB status - log and proceed with regular processing
                         error!("Error checking DOB spore status: {}", e);
@@ -549,16 +592,27 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
                 match db.get_spore_by_id(type_id).await {
                     Ok(Some(_)) => {
                         // Generic spore exists - do only partial update
-                        debug!("Generic spore exists - performing partial update for: {}", type_id);
-                        if let Err(e) = db.update_spore_owner_capacity(type_id, &owner, &capacity, &tx_hash, index).await {
-                            error!("Failed to update owner/capacity for spore {}: {}", type_id, e);
+                        debug!(
+                            "Generic spore exists - performing partial update for: {}",
+                            type_id
+                        );
+                        if let Err(e) = db
+                            .update_spore_owner_capacity(
+                                type_id, &owner, &capacity, &tx_hash, index,
+                            )
+                            .await
+                        {
+                            error!(
+                                "Failed to update owner/capacity for spore {}: {}",
+                                type_id, e
+                            );
                         }
                         return Ok(());
-                    },
+                    }
                     Ok(None) => {
                         // Generic spore doesn't exist - proceed with full update
                         debug!("Generic spore needs full insert: {}", type_id);
-                    },
+                    }
                     Err(e) => {
                         // Error checking spore status - log and proceed with regular processing
                         error!("Error checking generic spore status: {}", e);
@@ -568,7 +622,10 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
         } else {
             // If we get here with spore_data=None, that means decoding failed for some reason
             // Just log an error and return
-            error!("Spore data decoding failed for cell with type_id: {}", type_id);
+            error!(
+                "Spore data decoding failed for cell with type_id: {}",
+                type_id
+            );
             return Ok(());
         }
     }
@@ -578,7 +635,10 @@ pub async fn process_single_spore(cell: &SporeCell, db: Option<&Arc<crate::db::S
 }
 
 /// Regular spore processing without optimizations (original implementation)
-async fn process_regular_spore(cell: &SporeCell, db: Option<&Arc<crate::db::SporeDb>>) -> Result<()> {
+async fn process_regular_spore(
+    cell: &SporeCell,
+    db: Option<&Arc<crate::db::SporeDb>>,
+) -> Result<()> {
     // Convert to SporeData and store in database if DB is configured
     if let Some(db) = db {
         if let Some(spore_data) = cell.to_spore_data() {
@@ -595,12 +655,20 @@ async fn process_regular_spore(cell: &SporeCell, db: Option<&Arc<crate::db::Spor
 /// Process a list of spore cells
 ///
 /// This function is a placeholder for user-defined processing logic
-pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::db::SporeDb>>) -> Result<()> {
+pub async fn process_spore_cells(
+    cells: Vec<SporeCell>,
+    db: Option<&Arc<crate::db::SporeDb>>,
+) -> Result<()> {
     info!("Processing {} spore cells", cells.len());
 
     // First, identify DOB spores that need decoding
-    let config = crate::config::Config::load().map_err(|e| anyhow!("Failed to load config: {}", e))?;
-    let skip_decoding = config.spore_filters.iter().find(|f| f.enabled).map_or(false, |f| f.skip_decoding);
+    let config =
+        crate::config::Config::load().map_err(|e| anyhow!("Failed to load config: {}", e))?;
+    let skip_decoding = config
+        .spore_filters
+        .iter()
+        .find(|f| f.enabled)
+        .map_or(false, |f| f.skip_decoding);
 
     // If skip_decoding is true, log that we'll skip DOB decoding (but still process basic spore data)
     if skip_decoding {
@@ -609,7 +677,10 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
 
     // Separate DOB spores that need decoding
     let mut dob_spores = Vec::new();
-    if !skip_decoding && config.dob_decoder.is_some() && config.dob_decoder.as_ref().unwrap().enabled {
+    if !skip_decoding
+        && config.dob_decoder.is_some()
+        && config.dob_decoder.as_ref().unwrap().enabled
+    {
         for (index, cell) in cells.iter().enumerate() {
             if let Some(data) = &cell.spore_data {
                 // Only process DOB spores that haven't been decoded yet
@@ -642,16 +713,16 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
     if !dob_spores.is_empty() && config.dob_decoder.is_some() {
         let decoder_config = config.dob_decoder.unwrap();
         let decoder = crate::dob_decoder::DobDecoder::new(decoder_config.clone());
-        
+
         // Split into batches
         let batches = crate::dob_decoder::batch_items(dob_spores, decoder_config.batch_size);
-        
+
         for (batch_idx, batch) in batches.into_iter().enumerate() {
             debug!("Processing DOB batch {}, size: {}", batch_idx, batch.len());
-            
+
             // Send batch request
             let results = decoder.decode_batch(batch).await;
-            
+
             // Store results
             for (id, result) in results {
                 decoded_results.insert(id, result);
@@ -699,17 +770,20 @@ pub async fn process_spore_cells(cells: Vec<SporeCell>, db: Option<&Arc<crate::d
 /// This is a helper function that calls the original process_single_spore
 /// but with DOB decode results if available
 async fn process_single_spore_with_dob(
-    cell: &SporeCell, 
+    cell: &SporeCell,
     db: Option<&Arc<crate::db::SporeDb>>,
-    dob_results: &std::collections::HashMap<String, Result<crate::db::ServerDecodeResult, Box<dyn std::error::Error + Send + Sync>>>
+    dob_results: &std::collections::HashMap<
+        String,
+        Result<crate::db::ServerDecodeResult, Box<dyn std::error::Error + Send + Sync>>,
+    >,
 ) -> Result<()> {
     // NOTE: We're wrapping process_single_spore to avoid modifying it directly,
     // per the requirement to preserve its behavior.
     // DOB decode results are passed to the database separately when creating the DbSporeData.
-    
+
     // Process the spore normally
     process_single_spore(cell, db).await?;
-    
+
     // If we have DOB results and a database, update the record with the DOB data
     if let (Some(db), Some(type_id)) = (db, &cell.type_id) {
         if let Some(dob_result) = dob_results.get(type_id) {
@@ -718,17 +792,23 @@ async fn process_single_spore_with_dob(
                     // The JSON-RPC response already contains properly structured DOB decode output,
                     // use it directly as provided by the server
                     spore_data.dob_decode_output = Some(server_result.clone());
-                    
+
                     // Update the database
-                    debug!("Updating spore in database with DOB decode output: {}", spore_data.id);
+                    debug!(
+                        "Updating spore in database with DOB decode output: {}",
+                        spore_data.id
+                    );
                     if let Err(e) = db.upsert_spore(&spore_data).await {
-                        error!("Failed to update spore in database with DOB decode output: {}", e);
+                        error!(
+                            "Failed to update spore in database with DOB decode output: {}",
+                            e
+                        );
                     }
                 }
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -739,12 +819,23 @@ pub fn preload_type_id_files(filters: &[SporeFilterConfig]) -> Result<()> {
             if !file_path.is_empty() {
                 match load_type_ids_from_file(file_path) {
                     Ok(type_ids) => {
-                        info!("Preloaded {} Type IDs from file '{}'", type_ids.len(), file_path);
+                        info!(
+                            "Preloaded {} Type IDs from file '{}'",
+                            type_ids.len(),
+                            file_path
+                        );
                     }
                     Err(err) => {
-                        error!("Failed to preload Type IDs from file '{}': {}", file_path, err);
+                        error!(
+                            "Failed to preload Type IDs from file '{}': {}",
+                            file_path, err
+                        );
                         // Convert the box error to anyhow::Error
-                        return Err(anyhow!("Failed to load Type IDs from {}: {}", file_path, err));
+                        return Err(anyhow!(
+                            "Failed to load Type IDs from {}: {}",
+                            file_path,
+                            err
+                        ));
                     }
                 }
             }
@@ -758,14 +849,19 @@ impl SporeCell {
     pub fn to_spore_data(&self) -> Option<DbSporeData> {
         // Extract the Type ID
         let type_id = self.type_id.as_ref()?;
-        
+
         // Extract cell details
-        let tx_hash = self.raw_cell.get("out_point")
+        let tx_hash = self
+            .raw_cell
+            .get("out_point")
             .and_then(|out_point| out_point.get("tx_hash"))
             .and_then(|tx_hash| tx_hash.as_str())
-            .unwrap_or("unknown").to_string();
-        
-        let index = self.raw_cell.get("out_point")
+            .unwrap_or("unknown")
+            .to_string();
+
+        let index = self
+            .raw_cell
+            .get("out_point")
             .and_then(|out_point| out_point.get("index"))
             .and_then(|index| index.as_str())
             .and_then(|index_str| {
@@ -778,50 +874,55 @@ impl SporeCell {
                 }
             })
             .unwrap_or(0);
-        
+
         // Extract capacity
-        let capacity = self.raw_cell.get("output")
+        let capacity = self
+            .raw_cell
+            .get("output")
             .and_then(|output| output.get("capacity"))
             .and_then(|capacity| capacity.as_str())
-            .unwrap_or("0").to_string();
-        
+            .unwrap_or("0")
+            .to_string();
+
         // Get owner from lock script
-        let lock = self.raw_cell.get("output")
+        let lock = self
+            .raw_cell
+            .get("output")
             .and_then(|output| output.get("lock"));
-        
+
         let owner = if let Some(lock) = lock {
             Self::extract_owner_from_lock(lock, self.network_type)
                 .unwrap_or_else(|| "unknown".to_string())
         } else {
             "unknown".to_string()
         };
-        
+
         // Get content type and content
         debug!("Determining content type");
         let content_type = match &self.spore_data {
             Some(spore) => {
                 debug!("Using content_type from spore_data: {}", spore.content_type);
                 spore.content_type.to_string()
-            },
+            }
             None => {
                 debug!("No spore_data present, using default content type");
                 "plain/text".to_string()
             }
         };
-        
+
         debug!("Preparing content");
         let content = match &self.spore_data {
             Some(spore) => {
                 let content_bytes = &spore.content;
                 debug!("Content size: {} bytes", content_bytes.len());
-                
+
                 // For text content, try to convert to string
                 if content_type.starts_with("text/") || content_type.contains("json") {
                     match String::from_utf8(content_bytes.clone()) {
                         Ok(s) => {
                             debug!("Converted binary content to UTF-8 string");
                             s
-                        },
+                        }
                         Err(_) => {
                             debug!("Failed to convert binary content to UTF-8, using hex encoding");
                             hex::encode(content_bytes)
@@ -832,33 +933,33 @@ impl SporeCell {
                     debug!("Using hex encoding for binary content");
                     hex::encode(content_bytes)
                 }
-            },
+            }
             None => {
                 debug!("No spore_data present, content will be empty");
                 String::new()
             }
         };
-        
+
         // Get cluster ID or use empty string
         debug!("Determining cluster_id");
         let cluster_id = match &self.cluster_id {
             Some(id) => {
                 debug!("Using cluster_id from cell: {}", id);
                 id.clone()
-            },
+            }
             None => {
                 debug!("No cluster_id present, using empty string");
                 String::new()
             }
         };
-        
+
         // Convert network type
         let network_type_str = match self.network_type {
             NetworkType::Mainnet => Some("mainnet".to_string()),
             NetworkType::Testnet => Some("testnet".to_string()),
             _ => None,
         };
-        
+
         // DOB decoding is now handled externally in process_spore_cells
         debug!("Successfully created DbSporeData");
         Some(DbSporeData {
@@ -878,13 +979,11 @@ impl SporeCell {
     /// Extract owner address from lock script
     fn extract_owner_from_lock(lock: &Value, network_type: NetworkType) -> Option<String> {
         // Extract code_hash from lock script
-        let code_hash = lock.get("code_hash")
-            .and_then(|ch| ch.as_str())?;
-        
+        let code_hash = lock.get("code_hash").and_then(|ch| ch.as_str())?;
+
         // Extract hash_type from lock script
-        let hash_type_str = lock.get("hash_type")
-            .and_then(|ht| ht.as_str())?;
-        
+        let hash_type_str = lock.get("hash_type").and_then(|ht| ht.as_str())?;
+
         // Convert hash_type string to ScriptHashType
         let hash_type = match hash_type_str {
             "type" => ScriptHashType::Type,
@@ -896,24 +995,25 @@ impl SporeCell {
                 return None;
             }
         };
-        
+
         // Extract args from lock script
-        let args = lock.get("args")
+        let args = lock
+            .get("args")
             .and_then(|a| a.as_str())?
             .trim_start_matches("0x");
-        
+
         // Parse code_hash as H256
         let code_hash_bytes = match H256::from_str(code_hash.trim_start_matches("0x")) {
             Ok(hash) => hash,
             Err(_) => return None,
         };
-        
+
         // Parse args as bytes
         let args_bytes = match hex::decode(args) {
             Ok(bytes) => bytes,
             Err(_) => return None,
         };
-        
+
         // Create owner address
         let owner = Address::new(
             network_type,
@@ -923,8 +1023,9 @@ impl SporeCell {
                 args: args_bytes.into(),
             },
             true, // Use short address format
-        ).to_string();
-        
+        )
+        .to_string();
+
         Some(owner)
     }
 }

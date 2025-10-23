@@ -1,6 +1,6 @@
 use ckb_jsonrpc_types::Uint32;
 use futures::SinkExt;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -223,4 +223,3 @@ impl CkbClient {
         Ok((objects, last_cursor))
     }
 }
-

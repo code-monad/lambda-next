@@ -7,14 +7,17 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
+pub mod address;
 pub mod cluster;
 pub mod spore;
-pub mod address;
 
 /// Query parameters for API requests
 #[derive(Deserialize, Default)]
 pub struct QueryParams {
     pub network: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub decode_dobs: Option<bool>,
 }
 
 /// Request body for filtering by cluster IDs
@@ -26,13 +29,13 @@ pub struct ClusterFilter(pub Vec<String>);
 pub enum ApiError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
-    
+
     #[error("Invalid network type: {0}")]
     InvalidNetwork(String),
-    
+
     #[error("Not found: {0}")]
     NotFound(String),
-    
+
     #[error("JSON parsing error: {0}")]
     JsonParsingError(String),
 }
@@ -42,16 +45,16 @@ impl IntoResponse for ApiError {
         let (status, error_message) = match self {
             ApiError::Database(err) => {
                 error!("Database error: {}", err);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", err))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Database error: {}", err),
+                )
             }
             ApiError::InvalidNetwork(network) => (
                 StatusCode::BAD_REQUEST,
                 format!("Invalid network type: {}", network),
             ),
-            ApiError::NotFound(resource) => (
-                StatusCode::NOT_FOUND,
-                resource,
-            ),
+            ApiError::NotFound(resource) => (StatusCode::NOT_FOUND, resource),
             ApiError::JsonParsingError(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to parse JSON: {}", err),
@@ -65,4 +68,4 @@ impl IntoResponse for ApiError {
 
         (status, body).into_response()
     }
-} 
+}

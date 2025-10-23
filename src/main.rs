@@ -1,26 +1,26 @@
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::signal;
-use tokio::sync::{Mutex, broadcast, oneshot};
-use tokio::time::{Duration, Instant, sleep};
+use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{Level, debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn, Level};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
 mod ckb;
 mod config;
-mod query;
-mod utils;
-mod ws;
-mod spore;
 mod db;
 mod dob_decoder;
+mod query;
+mod spore;
+mod utils;
+mod ws;
 
 use ckb::CkbClient;
 use config::Config;
-use utils::{AppError, Result, SharedState};
 use spore::preload_type_id_files;
+use utils::{AppError, Result, SharedState};
 
 // Channels for coordinating shutdown
 struct ShutdownChannels {
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
                 url: db_config.url.clone(),
                 max_connections: db_config.max_connections,
             };
-            
+
             match db::SporeDb::new(&db_config_for_db).await {
                 Ok(db) => {
                     info!("Database connection established successfully");
@@ -269,7 +269,7 @@ async fn main() -> Result<()> {
                                 limit,
                                 query_state.clone(),
                                 query_config.clone(),
-                                db_for_query,  // Use the cloned value
+                                db_for_query, // Use the cloned value
                             )
                             .await;
 

@@ -70,13 +70,19 @@ impl DobDecoder {
     }
 
     /// Decode a batch of DOB spores
-    pub async fn decode_batch(&self, contents: Vec<(String, String)>) -> Vec<(String, Result<ServerDecodeResult, Box<dyn Error + Send + Sync>>)> {
+    pub async fn decode_batch(
+        &self,
+        contents: Vec<(String, String)>,
+    ) -> Vec<(
+        String,
+        Result<ServerDecodeResult, Box<dyn Error + Send + Sync>>,
+    )> {
         if contents.is_empty() {
             return vec![];
         }
 
         info!("Decoding {} DOB spores in batch", contents.len());
-        
+
         // Create batch JSON-RPC request
         let batch_requests = contents
             .iter()
@@ -102,10 +108,14 @@ impl DobDecoder {
                 contents
                     .into_iter()
                     .map(|(id, _)| {
-                        (id, Err(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Failed to send batch request: {}", e),
-                        )) as Box<dyn Error + Send + Sync>))
+                        (
+                            id,
+                            Err(Box::new(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to send batch request: {}", e),
+                            ))
+                                as Box<dyn Error + Send + Sync>),
+                        )
                     })
                     .collect()
             }
@@ -118,14 +128,28 @@ impl DobDecoder {
         &self,
         batch_requests: Vec<JsonRpcRequest>,
         contents: &[(String, String)],
-    ) -> Result<Vec<(String, Result<ServerDecodeResult, Box<dyn Error + Send + Sync>>)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<
+        Vec<(
+            String,
+            Result<ServerDecodeResult, Box<dyn Error + Send + Sync>>,
+        )>,
+        Box<dyn Error + Send + Sync>,
+    > {
         debug!("Sending batch request to URL: {}", self.config.url);
-        
+
         // Debug the request body
         let request_body = serde_json::to_string(&batch_requests).unwrap_or_default();
-        trace!("Request body (truncated): {}...", if request_body.len() > 500 { &request_body[..500] } else { &request_body });
-        
-        let response = self.client
+        trace!(
+            "Request body (truncated): {}...",
+            if request_body.len() > 500 {
+                &request_body[..500]
+            } else {
+                &request_body
+            }
+        );
+
+        let response = self
+            .client
             .post(&self.config.url)
             .json(&batch_requests)
             .send()
@@ -143,29 +167,39 @@ impl DobDecoder {
 
         // Get the response body as text first for debugging
         let response_text = response.text().await?;
-        debug!("Received response (truncated): {}...", if response_text.len() > 500 { &response_text[..500] } else { &response_text });
-        
+        debug!(
+            "Received response (truncated): {}...",
+            if response_text.len() > 500 {
+                &response_text[..500]
+            } else {
+                &response_text
+            }
+        );
+
         // Parse the response
         let responses: Vec<JsonRpcResponse> = match serde_json::from_str(&response_text) {
             Ok(parsed) => parsed,
             Err(e) => {
-                error!("Failed to parse JSON-RPC response: {} - Response was: {}", e, response_text);
+                error!(
+                    "Failed to parse JSON-RPC response: {} - Response was: {}",
+                    e, response_text
+                );
                 return Err(Box::new(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("Failed to parse JSON-RPC response: {}", e),
                 )));
             }
         };
-        
+
         trace!("Parsed {} JSON-RPC responses", responses.len());
-        
+
         // Map responses back to their IDs
         let mut results = Vec::with_capacity(contents.len());
-        
+
         for (i, (id, _)) in contents.iter().enumerate() {
             // Find the corresponding response
             let response_opt = responses.iter().find(|r| r.id == i as u64);
-            
+
             match response_opt {
                 Some(response) => {
                     if let Some(error) = &response.error {
@@ -175,7 +209,8 @@ impl DobDecoder {
                             Err(Box::new(std::io::Error::new(
                                 std::io::ErrorKind::Other,
                                 format!("JSON-RPC error: {}", error.message),
-                            )) as Box<dyn Error + Send + Sync>),
+                            ))
+                                as Box<dyn Error + Send + Sync>),
                         ));
                     } else if let Some(result) = &response.result {
                         // Parse the result
@@ -192,7 +227,8 @@ impl DobDecoder {
                                     Err(Box::new(std::io::Error::new(
                                         std::io::ErrorKind::Other,
                                         format!("Failed to parse result: {}", e),
-                                    )) as Box<dyn Error + Send + Sync>),
+                                    ))
+                                        as Box<dyn Error + Send + Sync>),
                                 ));
                             }
                         }
@@ -203,7 +239,8 @@ impl DobDecoder {
                             Err(Box::new(std::io::Error::new(
                                 std::io::ErrorKind::Other,
                                 "Missing result and error in response",
-                            )) as Box<dyn Error + Send + Sync>),
+                            ))
+                                as Box<dyn Error + Send + Sync>),
                         ));
                     }
                 }
@@ -219,44 +256,64 @@ impl DobDecoder {
                 }
             }
         }
-        
+
         Ok(results)
     }
 }
 
 /// Trace all steps of handling the DOB decode response, to help debug issues
-fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResult, Box<dyn Error + Send + Sync>> {
+fn trace_response_processing(
+    value: &Value,
+    id: &str,
+) -> Result<ServerDecodeResult, Box<dyn Error + Send + Sync>> {
     trace!("Processing DOB decode response for ID: {}", id);
-    trace!("Response value type: {}", if value.is_string() { "string" } else if value.is_object() { "object" } else { "other" });
-    
+    trace!(
+        "Response value type: {}",
+        if value.is_string() {
+            "string"
+        } else if value.is_object() {
+            "object"
+        } else {
+            "other"
+        }
+    );
+
     // If it's a string, try to parse it as JSON
     if value.is_string() {
         let s = value.as_str().unwrap();
-        trace!("String response (truncated): {}...", if s.len() > 100 { &s[..100] } else { s });
-        
+        trace!(
+            "String response (truncated): {}...",
+            if s.len() > 100 { &s[..100] } else { s }
+        );
+
         match serde_json::from_str::<Value>(s) {
             Ok(parsed) => {
                 trace!("Parsed string as JSON");
-                
+
                 // Check for different field naming patterns
                 let has_render_output = parsed.get("render_output").is_some();
                 let has_dob_content = parsed.get("dob_content").is_some();
-                
-                trace!("Field detection: render_output: {},  dob_content: {}", 
-                     has_render_output, has_dob_content);
-                
+
+                trace!(
+                    "Field detection: render_output: {},  dob_content: {}",
+                    has_render_output,
+                    has_dob_content
+                );
+
                 // Extract fields with fallbacks
-                let render_output = parsed.get("render_output")
+                let render_output = parsed
+                    .get("render_output")
                     .or_else(|| parsed.get("renderOutput"))
                     .map(|v| match v.as_str() {
                         Some(s) => s.to_string(),
-                        None => v.to_string()
+                        None => v.to_string(),
                     });
-                
-                let dob_content = parsed.get("dob_content")
+
+                let dob_content = parsed
+                    .get("dob_content")
                     .or_else(|| parsed.get("dobContent"))
                     .cloned();
-                
+
                 if let (Some(ro), Some(dc)) = (render_output, dob_content) {
                     debug!("Extracted DOB fields successfully for ID {}", id);
                     Ok(ServerDecodeResult {
@@ -270,7 +327,7 @@ fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResu
                         "Missing required fields in parsed response",
                     )))
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to parse string as JSON for ID {}: {}", id, e);
                 Err(Box::new(std::io::Error::new(
@@ -282,25 +339,30 @@ fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResu
     } else if value.is_object() {
         // Direct object handling
         trace!("Processing object response");
-        
+
         // Check for different field naming patterns
         let has_render_output = value.get("render_output").is_some();
         let has_dob_content = value.get("dob_content").is_some();
-        trace!("Field detection: render_output: {},dob_content: {}", 
-             has_render_output, has_dob_content);
-        
+        trace!(
+            "Field detection: render_output: {},dob_content: {}",
+            has_render_output,
+            has_dob_content
+        );
+
         // Extract fields with fallbacks
-        let render_output = value.get("render_output")
+        let render_output = value
+            .get("render_output")
             .or_else(|| value.get("renderOutput"))
             .map(|v| match v.as_str() {
                 Some(s) => s.to_string(),
-                None => v.to_string()
+                None => v.to_string(),
             });
-        
-        let dob_content = value.get("dob_content")
+
+        let dob_content = value
+            .get("dob_content")
             .or_else(|| value.get("dobContent"))
             .cloned();
-        
+
         if let (Some(ro), Some(dc)) = (render_output, dob_content) {
             debug!("Extracted DOB fields successfully for ID {}", id);
             Ok(ServerDecodeResult {
@@ -325,16 +387,14 @@ fn trace_response_processing(value: &Value, id: &str) -> Result<ServerDecodeResu
 
 /// Split a list into batches of the specified size
 pub fn batch_items<T>(items: Vec<T>, batch_size: usize) -> Vec<Vec<T>> {
-    items
-        .into_iter()
-        .fold(Vec::new(), |mut result, item| {
-            if let Some(last) = result.last_mut() {
-                if last.len() < batch_size {
-                    last.push(item);
-                    return result;
-                }
+    items.into_iter().fold(Vec::new(), |mut result, item| {
+        if let Some(last) = result.last_mut() {
+            if last.len() < batch_size {
+                last.push(item);
+                return result;
             }
-            result.push(vec![item]);
-            result
-        })
-} 
+        }
+        result.push(vec![item]);
+        result
+    })
+}

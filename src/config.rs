@@ -1,6 +1,6 @@
+use ckb_sdk::NetworkType;
 use serde::Deserialize;
 use std::error::Error;
-use ckb_sdk::NetworkType;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {

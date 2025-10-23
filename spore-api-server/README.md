@@ -13,8 +13,10 @@ An HTTP API server for querying Spore data from the database.
 
 ### Cluster Queries
 
-* `GET /cluster/:cluster_id/all?limit=100&offset=0&network=mainnet`
-  * Get all spores by cluster ID with pagination
+* `GET /cluster/:cluster_id/all?limit=100&offset=0&network=mainnet&decode_dobs=true`
+  * Get all spores by cluster ID with optional pagination
+  * Omit `limit` to stream the full result set
+  * `decode_dobs=false` skips parsing DOB render output into JSON values
   * Network is optional and supports aliases
 
 ### Address Queries
